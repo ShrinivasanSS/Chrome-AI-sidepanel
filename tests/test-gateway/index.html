@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chrome Sidepanel Test Harness</title>
+  <style>
+    body {
+      font-family: "Segoe UI", sans-serif;
+      margin: 0;
+      background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
+      color: #1f2937;
+    }
+
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+
+    .hero,
+    .card {
+      background: white;
+      border: 1px solid #dbe7ff;
+      border-radius: 18px;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+
+    .hero {
+      padding: 24px;
+      margin-bottom: 18px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+
+    .card {
+      padding: 18px;
+    }
+
+    h1, h2 {
+      margin-top: 0;
+    }
+
+    a {
+      display: inline-block;
+      margin-top: 12px;
+      text-decoration: none;
+      background: #1d4ed8;
+      color: white;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+
+    code {
+      background: #eef3fd;
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+
+    ul {
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <h1>Chrome Sidepanel Test Harness</h1>
+      <p>This compose environment provides one front door for local extension testing. Use the pages below after loading the unpacked extension in Chrome.</p>
+      <ul>
+        <li><code>/vanilla/</code> serves the vanilla HTML sample page.</li>
+        <li><code>/jsp/</code> serves the JSP/Tomcat sample app.</li>
+        <li>Future test services should be added as new compose services and new proxy locations in this gateway.</li>
+      </ul>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Vanilla Test App</h2>
+        <p>Static HTML page that triggers JSON, image, and ZIP requests and renders extension results inline.</p>
+        <a href="/vanilla/">Open Vanilla App</a>
+      </div>
+      <div class="card">
+        <h2>JSP Test App</h2>
+        <p>Tomcat-hosted sample with Analyze Photos, Analyze ZIP, and Analyze JSON pages.</p>
+        <a href="/jsp/">Open JSP App</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

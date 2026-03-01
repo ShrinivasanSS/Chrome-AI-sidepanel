@@ -1,0 +1,38 @@
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    container_name: chrome-sidepanel-test-gateway
+    depends_on:
+      - vanilla
+      - jsp
+    ports:
+      - "9090:80"
+    volumes:
+      - ./test-gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./test-gateway/index.html:/usr/share/nginx/html/index.html:ro
+    networks:
+      - testnet
+
+  vanilla:
+    image: nginx:1.27-alpine
+    container_name: chrome-sidepanel-test-vanilla
+    volumes:
+      - ./vanilla-server/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./vanila-html:/usr/share/nginx/html:ro
+      - ./example-inputs:/opt/example-inputs:ro
+    networks:
+      - testnet
+
+  jsp:
+    build:
+      context: ..
+      dockerfile: tests/jsp-sidepanel-sample/Dockerfile
+    container_name: chrome-sidepanel-test-jsp
+    volumes:
+      - ./example-inputs:/usr/local/tomcat/webapps/ROOT/example-inputs:ro
+    networks:
+      - testnet
+
+networks:
+  testnet:
+    driver: bridge

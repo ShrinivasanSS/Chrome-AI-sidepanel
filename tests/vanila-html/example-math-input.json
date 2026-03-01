@@ -1,0 +1,16 @@
+{
+  "agent": "Advanced Math Problem Solver & Analyzer",
+  "name": "MATHPROBLEMSOLVER",
+  "params": [
+    {
+      "input": "Basic Arithmetic Operations",
+      "data": "Analyze arithmetic operations including addition (25.75 + 13.46), subtraction (87.5 - 32.99), multiplication (12 × 15.625), and division (98.7 ÷ 0.8375 with rounding)",
+      "supplements": ["basicarithmetic", "decimaloperations", "multistepverification"]
+    },
+    {
+      "input": "Algebraic Equations",
+      "data": "Analyze linear (2x + 7 = 17), quadratic (3x² - 2x - 1 = 0), and system of equations (x + 2y = 5, 3x - y = 13) with solutions and verification steps",
+      "supplements": ["algebra", "systemsolving", "verificationchecks"]
+    }
+  ]
+}

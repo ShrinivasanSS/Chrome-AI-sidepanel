@@ -1,0 +1,41 @@
+{
+  "agent": "Advanced Math Problem Solver & Analyzer",
+  "name": "MATHPROBLEMSOLVER",
+  "params": [
+    {
+      "input": "Basic Arithmetic Operations",
+      "data": "Analyze arithmetic operations including addition (25.75 + 13.46), subtraction (87.5 - 32.99), multiplication (12 × 15.625), and division (98.7 ÷ 0.8375 with rounding)",
+      "supplements": ["basicarithmetic", "decimaloperations", "multistepverification"]
+    },
+    {
+      "input": "Algebraic Equations",
+      "data": "Analyze linear (2x + 7 = 17), quadratic (3x² - 2x - 1 = 0), and system of equations (x + 2y = 5, 3x - y = 13) with solutions and verification steps",
+      "supplements": ["algebra", "systemsolving", "verificationchecks"]
+    },
+    {
+      "input": "Trigonometry",
+      "data": "Analyze basic trigonometry (sin(45°)), inverse trigonometry (arcsin(0.5)), and Pythagorean theorem (13², 5², 12² verification)",
+      "supplements": ["trigonometry", "unitconversions", "theoremsverification"]
+    },
+    {
+      "input": "Calculus Operations",
+      "data": "Analyze differentiation (f(x) = 3x³ - 2x² + 5x - 7) using the power rule, integration (∫4x² + 3x + 2 dx), and chain rule for composite functions (sin(x²))",
+      "supplements": ["calculus", "chainrule", "integrationverification"]
+    },
+    {
+      "input": "Math Statistics",
+      "data": "Analyze dataset statistics (dataset: [12, 14, 16, 18, 20, 22, 25, 28]) for mean, median, mode, range, and standard deviation with verification",
+      "supplements": ["statistics", "dataanalysis", "measurementverification"]
+    },
+    {
+      "input": "Math Problem-Solving",
+      "data": "Solve geometry (rectangle perimeter), proportion (paint coverage), percentage (original price), and exponents (2⁵ + 3³ - 4²) with step-by-step verification",
+      "supplements": ["problemsolving", "realworld_applications", "verification"]
+    },
+    {
+      "input": "Custom Mathematical Challenge",
+      "data": "Solve magic square (fill 'X' in 3x3 grid) and compute (24*3² - 7³)/15 + 5(6² - 4)² with algebraic and arithmetic verification steps",
+      "supplements": ["complexproblem", "algebraicverification", "arithmetic_check"]
+    }
+  ]
+}

@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI SidePanel API Test Page</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 16px;
+      background: linear-gradient(180deg, #f7fbff 0%, #eef4ff 100%);
+      color: #1f2937;
+    }
+
+    .layout {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      border: 1px solid #dbe7ff;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    }
+
+    h1 {
+      margin-top: 0;
+      color: #1d4ed8;
+    }
+
+    h2 {
+      margin-top: 0;
+      font-size: 18px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 11px 16px;
+      background: #1d4ed8;
+      color: white;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    button:hover {
+      opacity: 0.92;
+    }
+
+    textarea,
+    pre {
+      width: 100%;
+      min-height: 220px;
+      box-sizing: border-box;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      padding: 12px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      background: #f8fafc;
+    }
+
+    .status {
+      padding: 12px;
+      border-radius: 12px;
+      background: #dbeafe;
+      color: #1d4ed8;
+      min-height: 24px;
+    }
+
+    .status.error {
+      background: #fee2e2;
+      color: #b91c1c;
+    }
+
+    .status.success {
+      background: #dcfce7;
+      color: #15803d;
+    }
+
+    .result-box {
+      margin-top: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      padding: 12px;
+      background: #fff;
+    }
+
+    .result-box h3 {
+      margin-top: 0;
+      font-size: 15px;
+    }
+
+    .muted {
+      color: #64748b;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card" style="margin-bottom: 16px;">
+    <h1>AI SidePanel Multiformat Test Page</h1>
+    <div class="muted">This page triggers the extension using legacy JSON, base64 images, and ZIP payloads from `tests/example-inputs`. Returned results are rendered below from the extension status events.</div>
+  </div>
+
+  <div class="layout">
+    <div class="card">
+      <h2>Preset Requests</h2>
+      <div class="actions">
+        <button id="sendJsonBtn">Analyze JSON</button>
+        <button id="sendImagesBtn">Analyze Photos</button>
+        <button id="sendZipBtn">Analyze ZIP</button>
+        <button id="loadMathBtn" class="secondary">Load Math Sample</button>
+      </div>
+      <div class="muted" style="margin-top: 12px;">The JSON and ZIP samples come from the repo’s `tests/example-inputs` folder.</div>
+    </div>
+
+    <div class="card">
+      <h2>Custom Request</h2>
+      <textarea id="customJson"></textarea>
+      <div class="actions">
+        <button id="sendCustomBtn">Send Custom Request</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="layout" style="margin-top: 16px;">
+    <div class="card">
+      <h2>Extension Status</h2>
+      <div id="status" class="status">Waiting for a request.</div>
+      <pre id="statusLog"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Rendered Results</h2>
+      <div id="results" class="result-box">
+        <div class="muted">No results yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const customJsonEl = document.getElementById('customJson');
+    const statusEl = document.getElementById('status');
+    const statusLogEl = document.getElementById('statusLog');
+    const resultsEl = document.getElementById('results');
+    const appBaseUrl = new URL('./', window.location.href);
+
+    document.getElementById('sendJsonBtn').addEventListener('click', sendJsonRequest);
+    document.getElementById('sendImagesBtn').addEventListener('click', sendImagesRequest);
+    document.getElementById('sendZipBtn').addEventListener('click', sendZipRequest);
+    document.getElementById('sendCustomBtn').addEventListener('click', sendCustomRequest);
+    document.getElementById('loadMathBtn').addEventListener('click', loadMathSample);
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      await loadDefaultJson();
+      setStatus('Ready. Use one of the preset requests or edit the JSON manually.', 'success');
+    });
+
+    document.addEventListener('ai-sidepanel-response', (event) => {
+      const detail = event.detail || {};
+      if (detail.success === false) {
+        setStatus(`Request failed: ${detail.error}`, 'error');
+        appendStatusLog(detail);
+        return;
+      }
+
+      if (detail.output) {
+        renderOutput(detail.output);
+        setStatus('Completed request. Results rendered below.', 'success');
+        appendStatusLog(detail);
+        return;
+      }
+
+      setStatus('Request accepted by the extension.', 'success');
+      appendStatusLog(detail);
+    });
+
+    document.addEventListener('ai-sidepanel-status', (event) => {
+      const detail = event.detail || {};
+      appendStatusLog(detail);
+
+      if (detail.type === 'started') {
+        setStatus(`Started request "${detail.name}" with model ${detail.model}.`, '');
+      } else if (detail.type === 'progress') {
+        setStatus(`Processing ${detail.completed + 1}/${detail.total}: ${detail.input}`, '');
+      } else if (detail.type === 'completed') {
+        setStatus('Completed request. Results rendered below.', 'success');
+        renderOutput(detail.output);
+      } else if (detail.type === 'error') {
+        setStatus(`Request failed: ${detail.error}`, 'error');
+      }
+    });
+
+    function setStatus(message, className) {
+      statusEl.textContent = message;
+      statusEl.className = `status ${className || ''}`.trim();
+    }
+
+    function appendStatusLog(detail) {
+      const nextLine = `${new Date().toLocaleTimeString()} ${JSON.stringify(detail, null, 2)}\n\n`;
+      statusLogEl.textContent = nextLine + statusLogEl.textContent;
+    }
+
+    function renderOutput(output) {
+      if (!output || !Array.isArray(output.response)) {
+        resultsEl.innerHTML = '<div class="muted">The extension did not return any structured output.</div>';
+        return;
+      }
+
+      resultsEl.innerHTML = output.response.map((entry) => `
+        <div style="margin-bottom: 16px;">
+          <h3>${escapeHtml(entry.input)}</h3>
+          <pre>${escapeHtml(entry.response)}</pre>
+        </div>
+      `).join('');
+    }
+
+    async function loadDefaultJson() {
+      const request = await buildJsonRequest();
+      customJsonEl.value = JSON.stringify(request, null, 2);
+    }
+
+    async function loadMathSample() {
+      const sample = await fetchJson(resolveAppUrl('example-inputs/json/example-math-input.json'));
+      customJsonEl.value = JSON.stringify(sample, null, 2);
+      setStatus('Loaded the math sample into the custom JSON editor.', 'success');
+    }
+
+    async function sendJsonRequest() {
+      const request = await buildJsonRequest();
+      customJsonEl.value = JSON.stringify(request, null, 2);
+      triggerExtensionAPI(request);
+    }
+
+    async function sendImagesRequest() {
+      const [languagesImage, trendsImage] = await Promise.all([
+        toDataUrl(resolveAppUrl('example-inputs/screenshots/languages.png')),
+        toDataUrl(resolveAppUrl('example-inputs/screenshots/trends.png'))
+      ]);
+
+      const request = {
+        agent: 'You are an image analyst. Compare the supplied screenshots and extract useful observations.',
+        name: 'PHOTO_ANALYZER',
+        params: [{
+          input: 'Analyze the provided screenshots',
+          data: 'Compare the screenshots, describe what is visible, and mention notable trends or differences.',
+          supplements: [
+            { type: 'image_base64', mediaType: 'image/png', data: languagesImage, fileName: 'languages.png' },
+            { type: 'image_base64', mediaType: 'image/png', data: trendsImage, fileName: 'trends.png' }
+          ]
+        }]
+      };
+
+      customJsonEl.value = JSON.stringify(request, null, 2);
+      triggerExtensionAPI(request);
+    }
+
+    async function sendZipRequest() {
+      const zipDataUrl = await toDataUrl(resolveAppUrl('example-inputs/zip/sample-json-screenshots.zip'), 'application/zip');
+      const request = {
+        agent: 'You are a multimodal reviewer. Read the JSON and screenshots from the ZIP file, then summarize the package.',
+        name: 'ZIP_ANALYZER',
+        params: [{
+          input: 'Analyze the provided ZIP package',
+          data: {
+            type: 'zip',
+            fileName: 'sample-json-screenshots.zip',
+            data: zipDataUrl
+          },
+          supplements: [
+            'Ignore unsupported files and summarize what was extracted.'
+          ]
+        }]
+      };
+
+      customJsonEl.value = JSON.stringify(request, null, 2);
+      triggerExtensionAPI(request);
+    }
+
+    async function sendCustomRequest() {
+      try {
+        const request = JSON.parse(customJsonEl.value.trim());
+        triggerExtensionAPI(request);
+      } catch (error) {
+        setStatus(`Invalid JSON: ${error.message}`, 'error');
+      }
+    }
+
+    async function buildJsonRequest() {
+      const sample = await fetchJson(resolveAppUrl('example-inputs/json/example-input.json'));
+      sample.name = 'JSON_ANALYZER';
+      sample.agent = 'You are a structured data reviewer. Analyze the provided JSON tasks and summarize the important findings.';
+      return sample;
+    }
+
+    function triggerExtensionAPI(requestData) {
+      document.dispatchEvent(new CustomEvent('ai-sidepanel-api-call', {
+        detail: requestData
+      }));
+      setStatus(`Sent "${requestData.name}" to the extension.`, '');
+    }
+
+    async function fetchJson(path) {
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Failed to load ${path}`);
+      }
+      return response.json();
+    }
+
+    async function toDataUrl(path, explicitMimeType) {
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Failed to load ${path}`);
+      }
+
+      const blob = await response.blob();
+      const mediaType = explicitMimeType || blob.type || 'application/octet-stream';
+      const buffer = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      bytes.forEach((byte) => {
+        binary += String.fromCharCode(byte);
+      });
+      return `data:${mediaType};base64,${btoa(binary)}`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function resolveAppUrl(relativePath) {
+      return new URL(relativePath, appBaseUrl).toString();
+    }
+  </script>
+</body>
+</html>

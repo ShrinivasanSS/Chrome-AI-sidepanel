@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AI Agent Panel Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 40px;
+      background-color: #f8f9fa;
+      line-height: 1.5;
+      color: #202124;
+    }
+
+    .container {
+      max-width: 760px;
+      margin: 0 auto;
+      background: white;
+      padding: 32px;
+      border-radius: 16px;
+      box-shadow: 0 2px 12px rgba(60, 64, 67, 0.12);
+    }
+
+    h1 {
+      color: #1a73e8;
+      font-size: 28px;
+      margin-bottom: 24px;
+      font-weight: 600;
+    }
+
+    .section {
+      border: 1px solid #dadce0;
+      border-radius: 12px;
+      padding: 18px;
+      margin-bottom: 18px;
+      background: #fcfcfd;
+    }
+
+    .section h2 {
+      margin-top: 0;
+      font-size: 18px;
+      color: #1f1f1f;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #3c4043;
+    }
+
+    input[type="text"],
+    input[type="url"],
+    select {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      font-size: 14px;
+      box-sizing: border-box;
+      background: white;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #5f6368;
+      margin-top: 4px;
+    }
+
+    .actions,
+    .model-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      padding: 12px 18px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    button:hover {
+      background-color: #1557b0;
+    }
+
+    button.secondary {
+      background-color: #5f6368;
+    }
+
+    button.secondary:hover {
+      background-color: #3c4043;
+    }
+
+    button.danger {
+      background-color: #c5221f;
+    }
+
+    button.danger:hover {
+      background-color: #a50e0e;
+    }
+
+    button:disabled {
+      background-color: #dadce0;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .status.success {
+      background-color: #e6f4ea;
+      color: #137333;
+      border: 1px solid #a8dab5;
+    }
+
+    .status.error {
+      background-color: #fce8e6;
+      color: #c5221f;
+      border: 1px solid #f6aea9;
+    }
+
+    .status.loading {
+      background-color: #e8f0fe;
+      color: #174ea6;
+      border: 1px solid #c7d2fe;
+    }
+
+    .model-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+
+    .storage-box,
+    .example-box {
+      background: #eef3fd;
+      border-radius: 10px;
+      padding: 14px;
+      border: 1px solid #c7d2fe;
+    }
+
+    .storage-metric {
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .example-code {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AI Agent Panel Settings</h1>
+
+    <form id="settingsForm">
+      <div class="section">
+        <h2>API Connection</h2>
+        <div class="form-group">
+          <label for="apiUrl">API Base URL</label>
+          <input type="url" id="apiUrl" placeholder="http://localhost:5001">
+          <div class="help-text">Base URL for your OpenAI-compatible server. The extension appends `/v1/chat/completions` automatically.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="apiKey">API Key</label>
+          <input type="text" id="apiKey" placeholder="sk-nokey">
+          <div class="help-text">Use `sk-nokey` for local mock servers that do not require authentication.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Models</h2>
+        <div id="modelsContainer"></div>
+        <div class="model-actions">
+          <button type="button" id="addModelBtn" class="secondary">Add Model</button>
+        </div>
+        <div class="form-group" style="margin-top: 16px;">
+          <label for="defaultModelId">Default Model</label>
+          <select id="defaultModelId"></select>
+          <div class="help-text">All modes use this model unless a request explicitly overrides it.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Storage</h2>
+        <div class="storage-box">
+          <div class="storage-metric" id="storageTotal">Total usage: -</div>
+          <div class="storage-metric" id="storageHistory">History store: -</div>
+          <div class="storage-metric" id="storageLocal">Local settings/session data: -</div>
+          <div class="storage-metric" id="storageCount">Stored conversations: -</div>
+          <div class="help-text" id="storageUpdatedAt"></div>
+        </div>
+        <div class="actions" style="margin-top: 12px;">
+          <button type="button" id="refreshStorageBtn" class="secondary">Refresh Usage</button>
+          <button type="button" id="clearStorageBtn" class="danger">Clean Storage</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" id="saveBtn">Save Settings</button>
+        <button type="button" id="testBtn" class="secondary">Test Connection</button>
+      </div>
+    </form>
+
+    <div id="status" class="status"></div>
+
+    <div class="section">
+      <h2>Example Request</h2>
+      <div class="example-box">
+        <div>The extension will call your server with OpenAI-compatible `messages` content, including text and image URL blocks when ZIPs or screenshots contain images.</div>
+        <div class="example-code" id="exampleCall"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="storage-utils.js"></script>
+  <script src="history-store.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

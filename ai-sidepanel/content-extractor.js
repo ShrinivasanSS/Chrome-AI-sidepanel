@@ -1,0 +1,145 @@
+// Content script to extract page information
+// This will be injected into the current tab to gather page data
+
+(function() {
+  // Extract main page text content
+  function extractPageText() {
+    // Remove script and style elements
+    const elementsToRemove = document.querySelectorAll('script, style, nav, header, footer, .ad, .advertisement');
+    const tempDoc = document.cloneNode(true);
+    elementsToRemove.forEach(el => {
+      const clonedEl = tempDoc.querySelector(el.tagName);
+      if (clonedEl) clonedEl.remove();
+    });
+
+    // Get main content areas
+    const contentSelectors = [
+      'main',
+      'article', 
+      '[role="main"]',
+      '.content',
+      '.main-content',
+      '#content',
+      '#main'
+    ];
+
+    let mainText = '';
+    
+    // Try to find main content area first
+    for (const selector of contentSelectors) {
+      const element = document.querySelector(selector);
+      if (element) {
+        mainText = element.innerText || element.textContent || '';
+        break;
+      }
+    }
+    
+    // If no main content found, use body but filter out navigation/sidebar
+    if (!mainText) {
+      const body = document.body.cloneNode(true);
+      
+      // Remove common non-content elements
+      const nonContentSelectors = [
+        'nav', 'header', 'footer', 'aside', '.sidebar', 
+        '.navigation', '.menu', '.ad', '.advertisement',
+        '.comments', '.social-media', '.related-posts'
+      ];
+      
+      nonContentSelectors.forEach(selector => {
+        const elements = body.querySelectorAll(selector);
+        elements.forEach(el => el.remove());
+      });
+      
+      mainText = body.innerText || body.textContent || '';
+    }
+    
+    // Clean up the text
+    return mainText
+      .replace(/\s+/g, ' ')
+      .replace(/\n\s*\n/g, '\n')
+      .trim()
+      .substring(0, 5000); // Limit to 5000 characters
+  }
+
+  // Extract headings for structure
+  function extractHeadings() {
+    const headings = [];
+    const headingElements = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    
+    headingElements.forEach(heading => {
+      if (heading.innerText.trim()) {
+        headings.push({
+          level: heading.tagName.toLowerCase(),
+          text: heading.innerText.trim()
+        });
+      }
+    });
+    
+    return headings.slice(0, 20); // Limit to 20 headings
+  }
+
+  // Extract meta information
+  function extractMetaInfo() {
+    const meta = {};
+    
+    // Description
+    const description = document.querySelector('meta[name="description"]');
+    if (description) {
+      meta.description = description.getAttribute('content');
+    }
+    
+    // Keywords
+    const keywords = document.querySelector('meta[name="keywords"]');
+    if (keywords) {
+      meta.keywords = keywords.getAttribute('content');
+    }
+    
+    // Open Graph data
+    const ogTitle = document.querySelector('meta[property="og:title"]');
+    const ogDescription = document.querySelector('meta[property="og:description"]');
+    const ogType = document.querySelector('meta[property="og:type"]');
+    
+    if (ogTitle) meta.ogTitle = ogTitle.getAttribute('content');
+    if (ogDescription) meta.ogDescription = ogDescription.getAttribute('content');
+    if (ogType) meta.ogType = ogType.getAttribute('content');
+    
+    return meta;
+  }
+
+  // Extract links information
+  function extractLinks() {
+    const links = [];
+    const linkElements = document.querySelectorAll('a[href]');
+    
+    linkElements.forEach(link => {
+      const href = link.getAttribute('href');
+      const text = link.innerText.trim();
+      
+      if (href && text && !href.startsWith('#') && !href.startsWith('javascript:')) {
+        links.push({
+          url: href,
+          text: text.substring(0, 100) // Limit text length
+        });
+      }
+    });
+    
+    return links.slice(0, 10); // Limit to 10 links
+  }
+
+  // Main extraction function
+  function extractPageData() {
+    return {
+      title: document.title,
+      url: window.location.href,
+      domain: window.location.hostname,
+      text: extractPageText(),
+      headings: extractHeadings(),
+      meta: extractMetaInfo(),
+      links: extractLinks(),
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  // Return the extracted data
+  return extractPageData();
+})();

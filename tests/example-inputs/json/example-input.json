@@ -1,0 +1,21 @@
+{
+  "agent": "You are a helpful assistant that analyzes text and provides insights.",
+  "name": "TEXT_ANALYZER_AGENT",
+  "params": [
+    {
+      "input": "Sentiment Analysis",
+      "data": "I love this new product! It works amazingly well and exceeded all my expectations.",
+      "supplements": ["analyze_sentiment", "provide_confidence_score"]
+    },
+    {
+      "input": "Key Points Extraction",
+      "data": "The quarterly report shows revenue increased by 15% compared to last quarter. Customer satisfaction scores improved from 4.2 to 4.7 out of 5. However, operational costs rose by 8% due to expanded marketing campaigns.",
+      "supplements": ["extract_key_metrics", "highlight_trends"]
+    },
+    {
+      "input": "Text Summarization",
+      "data": "Artificial intelligence has revolutionized numerous industries over the past decade. From healthcare diagnostics to financial trading algorithms, AI systems are now integral to modern business operations. Machine learning models can process vast amounts of data at unprecedented speeds, identifying patterns that would be impossible for humans to detect manually. However, this rapid advancement also brings challenges, including ethical concerns about bias in AI systems, job displacement fears, and the need for robust regulatory frameworks to ensure responsible AI development and deployment.",
+      "supplements": ["keep_under_50_words", "focus_on_main_points"]
+    }
+  ]
+}
