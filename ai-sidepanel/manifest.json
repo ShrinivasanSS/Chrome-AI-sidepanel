@@ -21,6 +21,9 @@
   "permissions": [
     "sidePanel",
     "storage",
+    "alarms",
+    "cookies",
+    "nativeMessaging",
     "activeTab",
     "tabs",
     "scripting"

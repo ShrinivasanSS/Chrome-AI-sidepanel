@@ -1,5 +1,6 @@
 const apiUrlEl = document.getElementById('apiUrl');
 const apiKeyEl = document.getElementById('apiKey');
+const extensionModeEl = document.getElementById('extensionMode');
 const modelsContainerEl = document.getElementById('modelsContainer');
 const defaultModelIdEl = document.getElementById('defaultModelId');
 const addModelBtn = document.getElementById('addModelBtn');
@@ -10,6 +11,28 @@ const exampleCallEl = document.getElementById('exampleCall');
 const settingsForm = document.getElementById('settingsForm');
 const refreshStorageBtn = document.getElementById('refreshStorageBtn');
 const clearStorageBtn = document.getElementById('clearStorageBtn');
+const refreshSkillsBtn = document.getElementById('refreshSkillsBtn');
+const enableAllSkillsBtn = document.getElementById('enableAllSkillsBtn');
+const disableAllSkillsBtn = document.getElementById('disableAllSkillsBtn');
+const skillsToggleListEl = document.getElementById('skillsToggleList');
+const skillsToggleSummaryEl = document.getElementById('skillsToggleSummary');
+
+const skillsRepositoryEnabledEl = document.getElementById('skillsRepositoryEnabled');
+const skillsRepositoryUrlEl = document.getElementById('skillsRepositoryUrl');
+const skillsAutoRefreshEl = document.getElementById('skillsAutoRefresh');
+const skillsRefreshIntervalEl = document.getElementById('skillsRefreshInterval');
+const skillsMaxAppliedEl = document.getElementById('skillsMaxApplied');
+const skillsCountEl = document.getElementById('skillsCount');
+const skillsLastSuccessEl = document.getElementById('skillsLastSuccess');
+const skillsLastAttemptEl = document.getElementById('skillsLastAttempt');
+const skillsSourceHealthEl = document.getElementById('skillsSourceHealth');
+const skillsErrorsEl = document.getElementById('skillsErrors');
+const processingTargetEl = document.getElementById('processingTarget');
+const runnerTypeEl = document.getElementById('runnerType');
+const runnerModeEl = document.getElementById('runnerMode');
+const runnerRemoteUrlEl = document.getElementById('runnerRemoteUrl');
+const runnerNativeHostNameEl = document.getElementById('runnerNativeHostName');
+const runnerTimeoutMsEl = document.getElementById('runnerTimeoutMs');
 
 const storageTotalEl = document.getElementById('storageTotal');
 const storageHistoryEl = document.getElementById('storageHistory');
@@ -18,12 +41,16 @@ const storageCountEl = document.getElementById('storageCount');
 const storageUpdatedAtEl = document.getElementById('storageUpdatedAt');
 
 let currentSettings = null;
+let lastSkillsCatalog = [];
 
 document.addEventListener('DOMContentLoaded', initializeSettingsPage);
 
 async function initializeSettingsPage() {
   settingsForm.addEventListener('submit', handleSave);
   testBtn.addEventListener('click', handleTest);
+  refreshSkillsBtn.addEventListener('click', handleRefreshSkills);
+  enableAllSkillsBtn.addEventListener('click', () => setAllSkillToggleState(true));
+  disableAllSkillsBtn.addEventListener('click', () => setAllSkillToggleState(false));
   addModelBtn.addEventListener('click', () => {
     renderModelRow({ label: '', value: '' });
     syncDefaultModelOptions();
@@ -32,18 +59,47 @@ async function initializeSettingsPage() {
   clearStorageBtn.addEventListener('click', handleClearStorage);
   apiUrlEl.addEventListener('input', updateExample);
   apiKeyEl.addEventListener('input', updateExample);
+  processingTargetEl.addEventListener('change', updateExample);
+  runnerTypeEl.addEventListener('change', updateExample);
+  runnerModeEl.addEventListener('change', updateExample);
+  runnerRemoteUrlEl.addEventListener('input', updateExample);
+  runnerNativeHostNameEl.addEventListener('input', updateExample);
+  runnerModeEl.addEventListener('change', updateRunnerFieldVisibility);
+  processingTargetEl.addEventListener('change', updateRunnerFieldVisibility);
 
   currentSettings = await StorageUtils.loadSettings();
   renderSettings(currentSettings);
-  await refreshStorageMetrics();
+  await Promise.all([
+    refreshStorageMetrics(),
+    refreshSkillsState()
+  ]);
 }
 
 function renderSettings(settings) {
   apiUrlEl.value = settings.apiUrl;
   apiKeyEl.value = settings.apiKey;
+  extensionModeEl.value = settings.extensionMode || 'developer';
+
   modelsContainerEl.innerHTML = '';
   settings.models.forEach((model) => renderModelRow(model));
   syncDefaultModelOptions(settings.defaultModelId);
+
+  const skillsConfig = settings.skillsConfig || StorageUtils.DEFAULT_SKILLS_CONFIG;
+  skillsRepositoryEnabledEl.checked = skillsConfig.repositoryEnabled !== false;
+  skillsRepositoryUrlEl.value = skillsConfig.repositoryUrl || StorageUtils.DEFAULT_SKILLS_CONFIG.repositoryUrl;
+  skillsAutoRefreshEl.checked = skillsConfig.autoRefresh !== false;
+  skillsRefreshIntervalEl.value = String(skillsConfig.refreshIntervalMinutes || 15);
+  skillsMaxAppliedEl.value = String(skillsConfig.maxAppliedSkills || 4);
+
+  const runnerConfig = settings.runnerConfig || StorageUtils.DEFAULT_RUNNER_CONFIG;
+  processingTargetEl.value = runnerConfig.processingTarget || 'api';
+  runnerTypeEl.value = runnerConfig.runnerType || 'claude';
+  runnerModeEl.value = runnerConfig.runnerMode || 'remote';
+  runnerRemoteUrlEl.value = runnerConfig.remoteUrl || StorageUtils.DEFAULT_RUNNER_CONFIG.remoteUrl;
+  runnerNativeHostNameEl.value = runnerConfig.nativeHostName || StorageUtils.DEFAULT_RUNNER_CONFIG.nativeHostName;
+  runnerTimeoutMsEl.value = String(runnerConfig.timeoutMs || StorageUtils.DEFAULT_RUNNER_CONFIG.timeoutMs);
+  updateRunnerFieldVisibility();
+
   updateExample();
 }
 
@@ -114,6 +170,28 @@ function syncDefaultModelOptions(selectedValue) {
   updateExample();
 }
 
+function collectSkillsConfig() {
+  return {
+    repositoryEnabled: skillsRepositoryEnabledEl.checked,
+    repositoryUrl: skillsRepositoryUrlEl.value.trim(),
+    autoRefresh: skillsAutoRefreshEl.checked,
+    refreshIntervalMinutes: Number(skillsRefreshIntervalEl.value) || 15,
+    maxAppliedSkills: Number(skillsMaxAppliedEl.value) || 4,
+    disabledSkillNames: getDisabledSkillNamesFromUi()
+  };
+}
+
+function collectRunnerConfig() {
+  return {
+    processingTarget: processingTargetEl.value === 'skill-runner' ? 'skill-runner' : 'api',
+    runnerType: runnerTypeEl.value,
+    runnerMode: runnerModeEl.value === 'local' ? 'local' : 'remote',
+    remoteUrl: runnerRemoteUrlEl.value.trim(),
+    nativeHostName: runnerNativeHostNameEl.value.trim(),
+    timeoutMs: Number(runnerTimeoutMsEl.value) || 120000
+  };
+}
+
 async function handleSave(event) {
   event.preventDefault();
 
@@ -126,16 +204,27 @@ async function handleSave(event) {
   const settings = {
     apiUrl: apiUrlEl.value.trim(),
     apiKey: apiKeyEl.value.trim(),
+    extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
     models,
-    defaultModelId: defaultModelIdEl.value
+    defaultModelId: defaultModelIdEl.value,
+    skillsConfig: collectSkillsConfig(),
+    runnerConfig: collectRunnerConfig()
   };
 
   try {
     saveBtn.disabled = true;
     currentSettings = await StorageUtils.saveSettings(settings);
     renderSettings(currentSettings);
+    try {
+      await sendRuntimeMessage({ command: 'settings-updated' });
+    } catch (workerError) {
+      console.warn('[Settings] Saved settings but background refresh failed:', workerError);
+    }
     showStatus('Settings saved.', 'success');
-    await refreshStorageMetrics();
+    await Promise.all([
+      refreshStorageMetrics(),
+      refreshSkillsState()
+    ]);
   } catch (error) {
     showStatus(`Failed to save settings: ${error.message}`, 'error');
   } finally {
@@ -148,8 +237,11 @@ async function handleTest() {
     const provisionalSettings = StorageUtils.sanitizeSettings({
       apiUrl: apiUrlEl.value.trim(),
       apiKey: apiKeyEl.value.trim(),
+      extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
       models: collectModels(),
-      defaultModelId: defaultModelIdEl.value
+      defaultModelId: defaultModelIdEl.value,
+      skillsConfig: collectSkillsConfig(),
+      runnerConfig: collectRunnerConfig()
     });
 
     const model = StorageUtils.getDefaultModel(provisionalSettings);
@@ -215,34 +307,177 @@ async function handleClearStorage() {
   }
 }
 
+async function handleRefreshSkills() {
+  try {
+    refreshSkillsBtn.disabled = true;
+    showStatus('Refreshing skills catalog...', 'loading');
+    const response = await sendRuntimeMessage({ command: 'refresh-skills' });
+    if (!response.success) {
+      throw new Error(response.error || 'Skills refresh failed');
+    }
+    await refreshSkillsState(response.state);
+    showStatus('Skills catalog refreshed.', 'success');
+  } catch (error) {
+    showStatus(`Failed to refresh skills: ${error.message}`, 'error');
+  } finally {
+    refreshSkillsBtn.disabled = false;
+  }
+}
+
+async function refreshSkillsState(preloadedState) {
+  let state = preloadedState;
+  if (!state) {
+    const response = await sendRuntimeMessage({ command: 'get-skills-state' });
+    if (response.success) {
+      state = response.state;
+    }
+  }
+
+  if (!state) {
+    lastSkillsCatalog = [];
+    skillsCountEl.textContent = 'Skills in catalog: -';
+    skillsLastSuccessEl.textContent = 'Last success: -';
+    skillsLastAttemptEl.textContent = 'Last attempt: -';
+    skillsSourceHealthEl.textContent = 'Source health: -';
+    skillsErrorsEl.textContent = '';
+    renderSkillToggleList([], []);
+    return;
+  }
+
+  skillsCountEl.textContent = `Skills in catalog: ${state.catalogCount || 0}`;
+  skillsLastSuccessEl.textContent = `Last success: ${state.lastSuccessAt ? new Date(state.lastSuccessAt).toLocaleString() : '-'}`;
+  skillsLastAttemptEl.textContent = `Last attempt: ${state.lastAttemptAt ? new Date(state.lastAttemptAt).toLocaleString() : '-'}`;
+
+  const sourceParts = [];
+  if (state.sources && state.sources.repository) {
+    sourceParts.push(`Repository: ${state.sources.repository.ok ? 'ok' : state.sources.repository.enabled ? 'error' : 'disabled'} (${state.sources.repository.count || 0})`);
+  }
+  skillsSourceHealthEl.textContent = `Source health: ${sourceParts.join(' | ') || '-'}`;
+
+  const errorLines = [];
+  if (state.lastError) {
+    errorLines.push(`Last error: ${state.lastError}`);
+  }
+  if (Array.isArray(state.warnings) && state.warnings.length > 0) {
+    errorLines.push(`Warnings: ${state.warnings.slice(0, 3).join(' | ')}`);
+  }
+  skillsErrorsEl.textContent = errorLines.join('\n');
+
+  lastSkillsCatalog = Array.isArray(state.catalog) ? state.catalog.slice() : [];
+  const disabled = (currentSettings && currentSettings.skillsConfig && Array.isArray(currentSettings.skillsConfig.disabledSkillNames))
+    ? currentSettings.skillsConfig.disabledSkillNames
+    : [];
+  renderSkillToggleList(lastSkillsCatalog, disabled);
+}
+
+function renderSkillToggleList(catalog, disabledNames) {
+  const disabledLookup = new Set((disabledNames || []).map((name) => String(name).toLowerCase()));
+  skillsToggleListEl.innerHTML = '';
+
+  if (!Array.isArray(catalog) || catalog.length === 0) {
+    skillsToggleListEl.innerHTML = '<div class="help-text">No skills discovered yet.</div>';
+    skillsToggleSummaryEl.textContent = '0 available';
+    return;
+  }
+
+  catalog.forEach((skill) => {
+    const row = document.createElement('label');
+    row.className = 'skills-toggle-item';
+    row.innerHTML = `
+      <input type="checkbox" class="skill-toggle-checkbox" data-skill-name="${escapeAttribute(skill.name)}">
+      <span><strong>${escapeHtml(skill.name)}</strong> - ${escapeHtml(skill.description || '')}</span>
+    `;
+    const checkbox = row.querySelector('.skill-toggle-checkbox');
+    checkbox.checked = !disabledLookup.has(String(skill.name).toLowerCase());
+    checkbox.addEventListener('change', () => {
+      const total = catalog.length;
+      const enabledCount = getEnabledSkillNamesFromUi().length;
+      skillsToggleSummaryEl.textContent = `${total} available, ${enabledCount} enabled`;
+    });
+    skillsToggleListEl.appendChild(row);
+  });
+
+  const enabled = getEnabledSkillNamesFromUi().length;
+  skillsToggleSummaryEl.textContent = `${catalog.length} available, ${enabled} enabled`;
+}
+
+function setAllSkillToggleState(enabled) {
+  const checkboxes = skillsToggleListEl.querySelectorAll('.skill-toggle-checkbox');
+  checkboxes.forEach((checkbox) => {
+    checkbox.checked = enabled;
+  });
+  const total = checkboxes.length;
+  skillsToggleSummaryEl.textContent = `${total} available, ${enabled ? total : 0} enabled`;
+}
+
+function getEnabledSkillNamesFromUi() {
+  const checkboxes = Array.from(skillsToggleListEl.querySelectorAll('.skill-toggle-checkbox'));
+  return checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.dataset.skillName);
+}
+
+function getDisabledSkillNamesFromUi() {
+  const checkboxes = Array.from(skillsToggleListEl.querySelectorAll('.skill-toggle-checkbox'));
+  if (checkboxes.length === 0) {
+    const fallback = currentSettings && currentSettings.skillsConfig && Array.isArray(currentSettings.skillsConfig.disabledSkillNames)
+      ? currentSettings.skillsConfig.disabledSkillNames
+      : [];
+    return fallback.slice();
+  }
+
+  return checkboxes
+    .filter((checkbox) => !checkbox.checked)
+    .map((checkbox) => checkbox.dataset.skillName);
+}
+
 function updateExample() {
   const settings = StorageUtils.sanitizeSettings({
     apiUrl: apiUrlEl.value.trim(),
     apiKey: apiKeyEl.value.trim(),
+    extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
     models: collectModels(),
-    defaultModelId: defaultModelIdEl.value
+    defaultModelId: defaultModelIdEl.value,
+    skillsConfig: collectSkillsConfig(),
+    runnerConfig: collectRunnerConfig()
   });
   const model = StorageUtils.getDefaultModel(settings);
+  const runnerConfig = settings.runnerConfig || StorageUtils.DEFAULT_RUNNER_CONFIG;
 
   exampleCallEl.textContent = [
     `POST ${settings.apiUrl}/v1/chat/completions`,
     `Authorization: Bearer ${settings.apiKey}`,
     'Content-Type: application/json',
     '',
-    JSON.stringify({
-      model: model.value,
-      messages: [
-        { role: 'system', content: 'Agent instructions' },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Task: Analyze the supplied ZIP and screenshots.' },
-            { type: 'image_url', image_url: { url: 'data:image/png;base64,...' } }
-          ]
-        }
-      ]
-    }, null, 2)
+    runnerConfig.processingTarget === 'api'
+      ? JSON.stringify({
+        model: model.value,
+        messages: [
+          { role: 'system', content: 'Agent instructions + selected skill instructions' },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Task: Analyze the supplied ZIP and screenshots.' },
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,...' } }
+            ]
+          }
+        ]
+      }, null, 2)
+      : JSON.stringify({
+        runner: runnerConfig.runnerType,
+        mode: runnerConfig.runnerMode,
+        promptArg: '--prompt',
+        prompt: 'Includes page data + cookies + user request'
+      }, null, 2)
   ].join('\n');
+}
+
+function updateRunnerFieldVisibility() {
+  const targetIsRunner = processingTargetEl.value === 'skill-runner';
+  const localMode = runnerModeEl.value === 'local';
+  runnerTypeEl.disabled = !targetIsRunner;
+  runnerModeEl.disabled = !targetIsRunner;
+  runnerRemoteUrlEl.disabled = !targetIsRunner || localMode;
+  runnerNativeHostNameEl.disabled = !targetIsRunner || !localMode;
+  runnerTimeoutMsEl.disabled = !targetIsRunner;
 }
 
 function showStatus(message, type) {
@@ -257,4 +492,23 @@ function escapeAttribute(value) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function escapeHtml(value) {
+  const div = document.createElement('div');
+  div.textContent = value == null ? '' : String(value);
+  return div.innerHTML;
+}
+
+function sendRuntimeMessage(payload) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(payload, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+
+      resolve(response || { success: false, error: 'No response' });
+    });
+  });
 }

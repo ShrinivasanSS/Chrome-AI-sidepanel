@@ -168,6 +168,38 @@
       white-space: pre-wrap;
       margin-top: 8px;
     }
+
+    .inline-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .inline-check input {
+      width: auto;
+    }
+
+    .skills-toggle-box {
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      padding: 10px;
+      background: white;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .skills-toggle-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .skills-toggle-item:last-child {
+      margin-bottom: 0;
+    }
   </style>
 </head>
 <body>
@@ -175,6 +207,18 @@
     <h1>AI Agent Panel Settings</h1>
 
     <form id="settingsForm">
+      <div class="section">
+        <h2>Extension Mode</h2>
+        <div class="form-group">
+          <label for="extensionMode">Mode</label>
+          <select id="extensionMode">
+            <option value="developer">Developer</option>
+            <option value="user">User</option>
+          </select>
+          <div class="help-text">Developer mode shows Basic/Advanced/API tabs. User mode only shows basic chat/query with settings/history.</div>
+        </div>
+      </div>
+
       <div class="section">
         <h2>API Connection</h2>
         <div class="form-group">
@@ -191,6 +235,51 @@
       </div>
 
       <div class="section">
+        <h2>Processing Backend</h2>
+        <div class="form-group">
+          <label for="processingTarget">Target</label>
+          <select id="processingTarget">
+            <option value="api">OpenAI-Compatible API</option>
+            <option value="skill-runner">Skill Runner</option>
+          </select>
+          <div class="help-text">When set to Skill Runner, API calls are bypassed and prompts are routed to a local or remote runner.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="runnerType">Skill Runner</label>
+          <select id="runnerType">
+            <option value="claude">Claude</option>
+            <option value="copilot">Copilot CLI</option>
+            <option value="cursor">Cursor</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="runnerMode">Runner Location</label>
+          <select id="runnerMode">
+            <option value="remote">Remote Runner URL</option>
+            <option value="local">Local Runner (Native Host)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="runnerRemoteUrl">Remote Runner URL</label>
+          <input type="url" id="runnerRemoteUrl" placeholder="http://localhost:7070/run">
+        </div>
+
+        <div class="form-group">
+          <label for="runnerNativeHostName">Native Host Name (Local)</label>
+          <input type="text" id="runnerNativeHostName" placeholder="com.local.skillrunner.host">
+          <div class="help-text">Local runner requires a Native Messaging host to actually launch CLI binaries.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="runnerTimeoutMs">Runner Timeout (ms)</label>
+          <input type="text" id="runnerTimeoutMs" placeholder="120000">
+        </div>
+      </div>
+
+      <div class="section">
         <h2>Models</h2>
         <div id="modelsContainer"></div>
         <div class="model-actions">
@@ -200,6 +289,56 @@
           <label for="defaultModelId">Default Model</label>
           <select id="defaultModelId"></select>
           <div class="help-text">All modes use this model unless a request explicitly overrides it.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Skills</h2>
+        <div class="inline-check">
+          <input type="checkbox" id="skillsRepositoryEnabled">
+          <label for="skillsRepositoryEnabled">Enable repository source</label>
+        </div>
+        <div class="form-group">
+          <label for="skillsRepositoryUrl">Repository Base URL</label>
+          <input type="url" id="skillsRepositoryUrl" placeholder="http://localhost/skills/repository">
+          <div class="help-text">Expected format is directory listing with files ending in `.skill` (zip packages).</div>
+        </div>
+
+        <div class="inline-check">
+          <input type="checkbox" id="skillsAutoRefresh">
+          <label for="skillsAutoRefresh">Auto refresh skills</label>
+        </div>
+        <div class="form-group">
+          <label for="skillsRefreshInterval">Refresh Interval (minutes)</label>
+          <input type="text" id="skillsRefreshInterval" placeholder="15">
+        </div>
+
+        <div class="form-group">
+          <label for="skillsMaxApplied">Max Applied Skills per Request</label>
+          <input type="text" id="skillsMaxApplied" placeholder="4">
+        </div>
+
+        <div class="form-group">
+          <label>Available Skills</label>
+          <div class="actions" style="margin-bottom: 8px;">
+            <button type="button" id="enableAllSkillsBtn" class="secondary">Enable All</button>
+            <button type="button" id="disableAllSkillsBtn" class="secondary">Disable All</button>
+          </div>
+          <div class="skills-toggle-box" id="skillsToggleList">
+            <div class="help-text">Refresh skills to see available packages.</div>
+          </div>
+          <div class="help-text" id="skillsToggleSummary">0 available</div>
+        </div>
+
+        <div class="storage-box">
+          <div class="storage-metric" id="skillsCount">Skills in catalog: -</div>
+          <div class="storage-metric" id="skillsLastSuccess">Last success: -</div>
+          <div class="storage-metric" id="skillsLastAttempt">Last attempt: -</div>
+          <div class="storage-metric" id="skillsSourceHealth">Source health: -</div>
+          <div class="help-text" id="skillsErrors"></div>
+        </div>
+        <div class="actions" style="margin-top: 12px;">
+          <button type="button" id="refreshSkillsBtn" class="secondary">Refresh Skills Now</button>
         </div>
       </div>
 

@@ -1,6 +1,15 @@
 # New Workitems 
 
-(still being drafted. Will be posted by Human once complete)
+Mar 16 2026
+
+-- (External project integration)
+* The extension should support 'Skills' from a repository or from some build zip (let's say the zip is at http://localhost/skills/latest.zip) and use them while performing agentic actions.
+* The skills should be periodically updated. 
+* The extension should have 2 modes now. 1 - Developer and 2 - User. This should be configurable in Settings page. 
+* The existing extension contains 3 tabs - Basic / Advanced / API. Now these 3 options should only be available when Extension is in Developer mode. In the User Mode only show basic chat/query functionality with settings/history options, no additional tabs. 
+
+Skills support
+- Skills are an open standard. Use the `Skills-Reference.md` document for specifications and requirements of implementation. 
 
 # Completed workitems - March 1 2026
 

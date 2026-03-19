@@ -247,11 +247,24 @@
       <button id="advancedModeBtn" class="mode-btn">Advanced</button>
       <button id="apiModeBtn" class="mode-btn">API</button>
     </div>
-    <div class="toolbar-group">
+    <div class="toolbar-group" id="developerControls">
       <label class="field-label" for="modelSelect">Model</label>
       <select id="modelSelect"></select>
+    </div>
+    <div class="toolbar-group">
       <button id="settingsBtn" class="secondary">Settings</button>
     </div>
+  </div>
+
+  <div class="section-card">
+    <div class="toolbar">
+      <div class="section-title" style="margin: 0;">Input Context</div>
+      <div class="toolbar-group">
+        <label for="includeTabContentToggle" style="margin: 0; font-weight: 500;">Include Active Tab Content</label>
+        <input type="checkbox" id="includeTabContentToggle">
+      </div>
+    </div>
+    <div class="muted">Default is off. When enabled, Basic and Advanced requests include current tab data (text, screenshot, and metadata).</div>
   </div>
 
   <div id="basicMode" class="section-card">

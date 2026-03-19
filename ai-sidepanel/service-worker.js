@@ -1,13 +1,35 @@
-importScripts('storage-utils.js', 'history-store.js', 'zip-utils.js', 'request-normalizer.js');
+importScripts('storage-utils.js', 'history-store.js', 'zip-utils.js', 'request-normalizer.js', 'skills-manager.js');
 
 chrome.runtime.onInstalled.addListener(async () => {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  await StorageUtils.loadSettings();
-  await StorageUtils.refreshStorageMetrics();
+  try {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    await StorageUtils.loadSettings();
+    await SkillsManager.refreshSkills({ reason: 'installed' });
+    await SkillsManager.scheduleRefreshAlarm();
+    await StorageUtils.refreshStorageMetrics();
+  } catch (error) {
+    console.error('[Service Worker] onInstalled initialization failed:', error);
+  }
 });
 
 chrome.runtime.onStartup.addListener(async () => {
-  await StorageUtils.loadSettings();
+  try {
+    await StorageUtils.loadSettings();
+    await SkillsManager.refreshSkills({ reason: 'startup' });
+    await SkillsManager.scheduleRefreshAlarm();
+  } catch (error) {
+    console.error('[Service Worker] onStartup initialization failed:', error);
+  }
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm && alarm.name === 'skills-refresh') {
+    try {
+      await SkillsManager.refreshSkills({ reason: 'alarm' });
+    } catch (error) {
+      console.error('[Service Worker] Alarm refresh failed:', error);
+    }
+  }
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -38,6 +60,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === 'clear-api-session') {
     chrome.storage.local.remove(['apiCurrentSession']).then(() => {
       sendResponse({ success: true });
+    }).catch((error) => {
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  if (request.command === 'refresh-skills') {
+    SkillsManager.refreshSkills({ reason: 'manual' }).then(async (state) => {
+      await SkillsManager.scheduleRefreshAlarm();
+      sendResponse({ success: true, state });
+    }).catch((error) => {
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  if (request.command === 'get-skills-state') {
+    chrome.storage.local.get(['skillsState']).then((result) => {
+      sendResponse({ success: true, state: result.skillsState || null });
+    }).catch((error) => {
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
+
+  if (request.command === 'settings-updated') {
+    SkillsManager.scheduleRefreshAlarm().then(() =>
+      SkillsManager.refreshSkills({ reason: 'settings-updated' })
+    ).then((state) => {
+      sendResponse({ success: true, state });
     }).catch((error) => {
       sendResponse({ success: false, error: error.message });
     });
@@ -100,6 +152,8 @@ async function processRequestLifecycle(options) {
   const normalized = await RequestNormalizer.normalizeRequest(options.rawRequest);
   const settings = await StorageUtils.loadSettings();
   const model = StorageUtils.resolveModel(settings, normalized.preferredModel);
+  const skillContext = await SkillsManager.buildAgentContext(options.rawRequest, normalized);
+  const useSkillRunner = settings.runnerConfig && settings.runnerConfig.processingTarget === 'skill-runner';
   const sessionId = StorageUtils.createId(options.mode || 'request');
 
   const session = {
@@ -116,6 +170,7 @@ async function processRequestLifecycle(options) {
       total: normalized.tasks.length
     },
     warnings: normalized.warnings,
+    selectedSkills: skillContext.selectedSkills,
     responses: []
   };
 
@@ -145,7 +200,16 @@ async function processRequestLifecycle(options) {
     });
 
     try {
-      const response = await callAi(settings, model, normalized.agent, task);
+      const response = useSkillRunner
+        ? await callSkillRunner(settings, normalized.agent, task, {
+          source: options.source,
+          mode: options.mode || 'advanced',
+          model: model.value,
+          requestName: normalized.name,
+          selectedSkills: skillContext.selectedSkills,
+          skillsConfig: settings.skillsConfig || null
+        })
+        : await callAi(settings, model, skillContext.agentPrompt, task);
       responses.push({
         input: task.input,
         response,
@@ -179,6 +243,12 @@ async function processRequestLifecycle(options) {
   if (normalized.warnings.length > 0) {
     output.warnings = normalized.warnings;
   }
+  if (skillContext.warnings.length > 0) {
+    output.skillWarnings = skillContext.warnings;
+  }
+  if (skillContext.selectedSkills.length > 0) {
+    output.appliedSkills = skillContext.selectedSkills;
+  }
 
   session.status = 'completed';
   session.output = output;
@@ -196,7 +266,8 @@ async function processRequestLifecycle(options) {
     requestName: normalized.name,
     requestData: options.rawRequest,
     outputData: output,
-    warnings: normalized.warnings
+    warnings: normalized.warnings,
+    selectedSkills: skillContext.selectedSkills
   });
 
   await StorageUtils.refreshStorageMetrics();
@@ -213,11 +284,140 @@ async function processRequestLifecycle(options) {
   };
 }
 
-async function callAi(settings, model, agent, task) {
+function buildRunnerPrompt(agentPrompt, task, context) {
+  const source = context && context.source ? context.source : {};
+  const cookieHeader = source.cookieHeader || '';
+  const cookies = Array.isArray(source.cookies) ? source.cookies : [];
+  const sourceBlock = [
+    `Mode: ${context.mode || 'unknown'}`,
+    `Request: ${context.requestName || 'unknown'}`,
+    `Source URL: ${source.url || 'unknown'}`,
+    `Source Title: ${source.title || 'unknown'}`
+  ].join('\n');
+
+  return [
+    agentPrompt,
+    '',
+    'Context:',
+    sourceBlock,
+    '',
+    cookieHeader ? `Cookies (header): ${cookieHeader}` : 'Cookies (header): -',
+    cookies.length > 0 ? `Cookies (JSON): ${JSON.stringify(cookies)}` : 'Cookies (JSON): []',
+    '',
+    'User Task:',
+    task.userText
+  ].join('\n');
+}
+
+async function callSkillRunner(settings, agentPrompt, task, context) {
+  const runnerConfig = settings.runnerConfig || {};
+  const prompt = buildRunnerPrompt(agentPrompt, task, context || {});
+
+  if (runnerConfig.runnerMode === 'local') {
+    return invokeLocalRunner(runnerConfig, prompt, context || {});
+  }
+
+  return invokeRemoteRunner(runnerConfig, prompt, context || {});
+}
+
+function getRunnerPromptArg(runnerType) {
+  const runner = String(runnerType || '').toLowerCase();
+  if (runner === 'claude') {
+    return '--print';
+  }
+  if (runner === 'cursor') {
+    return '-p';
+  }
+  return '--prompt';
+}
+
+function sendNativeMessage(hostName, message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendNativeMessage(hostName, message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function invokeLocalRunner(runnerConfig, prompt, context) {
+  const hostName = runnerConfig.nativeHostName || 'com.local.skillrunner.host';
+  const promptArg = getRunnerPromptArg(runnerConfig.runnerType);
+  const response = await sendNativeMessage(hostName, {
+    action: 'run-skill-runner',
+    runner: runnerConfig.runnerType || 'claude',
+    promptArg,
+    prompt,
+    timeoutMs: runnerConfig.timeoutMs || 120000,
+    skillsConfig: context && context.skillsConfig ? context.skillsConfig : null,
+    context
+  });
+
+  if (!response) {
+    throw new Error('Local runner host returned no response');
+  }
+
+  if (response.success === false) {
+    throw new Error(response.error || 'Local runner execution failed');
+  }
+
+  if (typeof response.output === 'string' && response.output.trim()) {
+    return response.output;
+  }
+
+  return JSON.stringify(response);
+}
+
+async function invokeRemoteRunner(runnerConfig, prompt, context) {
+  const remoteUrl = runnerConfig.remoteUrl;
+  if (!remoteUrl) {
+    throw new Error('Remote runner URL is not configured');
+  }
+
+  const promptArg = getRunnerPromptArg(runnerConfig.runnerType);
+  const response = await fetch(remoteUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      runner: runnerConfig.runnerType || 'claude',
+      promptArg,
+      prompt,
+      timeoutMs: runnerConfig.timeoutMs || 120000,
+      skillsConfig: context && context.skillsConfig ? context.skillsConfig : null,
+      context
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Remote runner failed (${response.status}): ${errorText}`);
+  }
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    const data = await response.json();
+    if (data && data.success === false) {
+      throw new Error(data.error || 'Remote runner execution failed');
+    }
+    if (data && typeof data.output === 'string') {
+      return data.output;
+    }
+    return JSON.stringify(data);
+  }
+
+  return response.text();
+}
+
+async function callAi(settings, model, agentPrompt, task) {
   const requestBody = {
     model: model.value,
     messages: [
-      { role: 'system', content: agent },
+      { role: 'system', content: agentPrompt },
       RequestNormalizer.buildUserMessage(task)
     ]
   };
@@ -273,6 +473,16 @@ async function handleTabCapture(sendResponse) {
     });
 
     const pageData = result.result;
+    let cookies = [];
+    let cookieHeader = '';
+    try {
+      if (tab.url) {
+        cookies = await chrome.cookies.getAll({ url: tab.url });
+        cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+      }
+    } catch (cookieError) {
+      console.warn('[Service Worker] Unable to read cookies for tab:', cookieError);
+    }
 
     sendResponse({
       success: true,
@@ -283,7 +493,9 @@ async function handleTabCapture(sendResponse) {
         pageText: pageData.text,
         meta: pageData.meta,
         headings: pageData.headings,
-        links: pageData.links
+        links: pageData.links,
+        cookies,
+        cookieHeader
       }
     });
   } catch (error) {

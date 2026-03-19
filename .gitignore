@@ -1,0 +1,7 @@
+external/**
+reference-extension-samples/**
+skill-launcher/runtime/**
+skill-launcher/.claude/**
+skill-launcher/.copilot/**
+skill-launcher/.cursor/**
+**/__pycache__/**

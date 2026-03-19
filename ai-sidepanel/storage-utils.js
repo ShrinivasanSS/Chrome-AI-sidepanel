@@ -15,6 +15,24 @@
     updatedAt: null
   };
 
+  const DEFAULT_SKILLS_CONFIG = {
+    repositoryEnabled: true,
+    repositoryUrl: 'http://localhost/skills/repository',
+    autoRefresh: true,
+    refreshIntervalMinutes: 15,
+    maxAppliedSkills: 4,
+    disabledSkillNames: []
+  };
+
+  const DEFAULT_RUNNER_CONFIG = {
+    processingTarget: 'api',
+    runnerType: 'claude',
+    runnerMode: 'remote',
+    remoteUrl: 'http://localhost:7070/run',
+    nativeHostName: 'com.local.skillrunner.host',
+    timeoutMs: 120000
+  };
+
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -107,6 +125,51 @@
     };
   }
 
+  function normalizeExtensionMode(value) {
+    return value === 'user' ? 'user' : 'developer';
+  }
+
+  function normalizeSkillsConfig(rawConfig) {
+    const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+    const defaults = global.SkillsManager && SkillsManager.DEFAULT_SKILLS_CONFIG
+      ? SkillsManager.DEFAULT_SKILLS_CONFIG
+      : DEFAULT_SKILLS_CONFIG;
+
+    const disabledSkillNames = Array.isArray(source.disabledSkillNames)
+      ? source.disabledSkillNames
+        .filter((name) => typeof name === 'string')
+        .map((name) => name.trim())
+        .filter(Boolean)
+      : [];
+
+    return {
+      repositoryEnabled: source.repositoryEnabled !== false,
+      repositoryUrl: sanitizeText(source.repositoryUrl, defaults.repositoryUrl),
+      autoRefresh: source.autoRefresh !== false,
+      refreshIntervalMinutes: Math.max(1, Number(source.refreshIntervalMinutes) || defaults.refreshIntervalMinutes),
+      maxAppliedSkills: Math.max(1, Number(source.maxAppliedSkills) || defaults.maxAppliedSkills),
+      disabledSkillNames
+    };
+  }
+
+  function normalizeRunnerConfig(rawConfig) {
+    const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+    const processingTarget = source.processingTarget === 'skill-runner' ? 'skill-runner' : 'api';
+    const runnerType = ['claude', 'copilot', 'cursor'].includes(source.runnerType)
+      ? source.runnerType
+      : DEFAULT_RUNNER_CONFIG.runnerType;
+    const runnerMode = source.runnerMode === 'local' ? 'local' : 'remote';
+
+    return {
+      processingTarget,
+      runnerType,
+      runnerMode,
+      remoteUrl: sanitizeText(source.remoteUrl, DEFAULT_RUNNER_CONFIG.remoteUrl),
+      nativeHostName: sanitizeText(source.nativeHostName, DEFAULT_RUNNER_CONFIG.nativeHostName),
+      timeoutMs: Math.max(5000, Number(source.timeoutMs) || DEFAULT_RUNNER_CONFIG.timeoutMs)
+    };
+  }
+
   function sanitizeSettings(rawSettings) {
     const normalizedModels = normalizeModels(rawSettings.models, rawSettings.model);
     const defaultModelId = sanitizeText(rawSettings.defaultModelId, normalizedModels[0].id);
@@ -117,7 +180,10 @@
       apiKey: sanitizeText(rawSettings.apiKey, 'sk-nokey'),
       models: normalizedModels,
       defaultModelId: hasDefault ? defaultModelId : normalizedModels[0].id,
-      storageMetrics: normalizeStorageMetrics(rawSettings.storageMetrics)
+      storageMetrics: normalizeStorageMetrics(rawSettings.storageMetrics),
+      extensionMode: normalizeExtensionMode(rawSettings.extensionMode),
+      skillsConfig: normalizeSkillsConfig(rawSettings.skillsConfig),
+      runnerConfig: normalizeRunnerConfig(rawSettings.runnerConfig)
     };
   }
 
@@ -128,10 +194,21 @@
       'models',
       'defaultModelId',
       'model',
-      'storageMetrics'
+      'storageMetrics',
+      'extensionMode',
+      'skillsConfig',
+      'runnerConfig'
     ]);
 
-    if (localSettings.apiUrl || localSettings.apiKey || localSettings.models || localSettings.defaultModelId) {
+    if (
+      localSettings.apiUrl ||
+      localSettings.apiKey ||
+      localSettings.models ||
+      localSettings.defaultModelId ||
+      localSettings.extensionMode ||
+      localSettings.skillsConfig ||
+      localSettings.runnerConfig
+    ) {
       const sanitized = sanitizeSettings(localSettings);
       await chrome.storage.local.set(sanitized);
       return sanitized;
@@ -155,10 +232,21 @@
       'models',
       'defaultModelId',
       'model',
-      'storageMetrics'
+      'storageMetrics',
+      'extensionMode',
+      'skillsConfig',
+      'runnerConfig'
     ]);
 
-    const hasStructuredSettings = existing.apiUrl || existing.apiKey || existing.models || existing.defaultModelId;
+    const hasStructuredSettings = (
+      existing.apiUrl ||
+      existing.apiKey ||
+      existing.models ||
+      existing.defaultModelId ||
+      existing.extensionMode ||
+      existing.skillsConfig ||
+      existing.runnerConfig
+    );
     if (!hasStructuredSettings) {
       return migrateLegacySettings();
     }
@@ -250,6 +338,8 @@
   global.StorageUtils = {
     DEFAULT_MODEL: clone(DEFAULT_MODEL),
     DEFAULT_STORAGE_METRICS: clone(DEFAULT_STORAGE_METRICS),
+    DEFAULT_SKILLS_CONFIG: clone(DEFAULT_SKILLS_CONFIG),
+    DEFAULT_RUNNER_CONFIG: clone(DEFAULT_RUNNER_CONFIG),
     loadSettings,
     saveSettings,
     sanitizeSettings,

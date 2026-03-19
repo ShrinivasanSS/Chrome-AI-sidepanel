@@ -23,3 +23,30 @@ Use this section for reducing repeated searches.
   - expose the asset URL path with nginx `alias`
 - Current compose entrypoint in the repo is `http://localhost:9090/`, not `8080`.
 - As of the latest human review, the planned feature set is complete. Testing remains active and follow-up bugs will be documented separately instead of being mixed into the completed implementation notes.
+
+## March 19 2026
+
+- For MV3 service workers, periodic skills refresh should use `chrome.alarms` instead of `setInterval`; alarms survive worker suspension and rehydrate execution when Chrome wakes the worker.
+- "Repository skills" in-browser cannot safely assume direct filesystem traversal. The implemented pattern uses an HTTP repository base URL and discovers `.skill` package links from the directory listing.
+- To avoid breaking runtime behavior during source outages, skills refresh keeps the previous catalog when a refresh returns zero new skills and at least one source error. This preserves last-known-good skill behavior.
+- Repository discovery now treats `.skill` packages as the source of truth; duplicate skill names inside multiple packages are deduplicated by name (latest discovered package wins for that name).
+- User mode only gates sidepanel visibility for `Advanced` and `API`; background API request processing remains active to preserve external page integrations.
+- Skills repository format was changed from index-driven metadata to directory-discovered `.skill` packages. The loader now parses repository listing HTML/text for links ending with `.skill`, downloads each package, and reads `SKILL.md` from inside the ZIP.
+- Per-skill enable/disable now uses a deny list (`skillsConfig.disabledSkillNames`) so newly discovered skills are enabled by default unless explicitly disabled.
+- Chrome extensions cannot launch local binaries directly. Local runner support must go through Native Messaging (`chrome.runtime.sendNativeMessage`) with a separately installed host binary that shells out to `claude`, `copilot`, or `cursor`.
+- Remote runner mode is operational over HTTP and should return either plain text or JSON with an `output` field for display in extension responses.
+- `skill-launcher` now provides both transports from the same core:
+  - remote HTTP (`/run`, `/update-skills`, `/health`)
+  - native messaging (length-prefixed JSON protocol)
+- Runner payload now includes `skillsConfig`, so launcher can sync `.skill` packages from the configured repository before each run and keep backend skill state aligned with extension settings.
+- Launcher skill sync paths were updated to local tool folders under launcher root (`.claude/skills`, `.copilot/skills`, `.cursor/skills`). Runner commands now execute with launcher root as the process `cwd`.
+- Runner CLI argument mapping is now explicit per tool:
+  - Claude: `--print`
+  - Copilot: `--prompt`
+  - Cursor: `agent -p`
+- For runner backend mode, extension no longer appends full skill instruction bodies into prompt text; synced local skills are expected to be used by the runner directly.
+- Sidepanel now has a persisted `includeTabContent` toggle (default `false`) used by both Basic and Advanced modes:
+  - Basic OFF: pure typed query
+  - Basic ON: capture + include page text/screenshot/meta/cookies
+  - Advanced OFF: payload unchanged
+  - Advanced ON: each task is enriched with captured tab context as supplements

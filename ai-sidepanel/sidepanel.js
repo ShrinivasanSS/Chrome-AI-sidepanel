@@ -5,6 +5,8 @@ const statusEl = document.getElementById('status');
 const outputJsonEl = document.getElementById('outputJson');
 const copyBtn = document.getElementById('copyBtn');
 const modelSelectEl = document.getElementById('modelSelect');
+const developerControls = document.getElementById('developerControls');
+const includeTabContentToggle = document.getElementById('includeTabContentToggle');
 const historyListEl = document.getElementById('historyList');
 const historyUsageEl = document.getElementById('historyUsage');
 const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -30,6 +32,8 @@ const apiOutput = document.getElementById('apiOutput');
 let currentOutput = null;
 let currentMode = 'basic';
 let currentSettings = null;
+let extensionMode = 'developer';
+let includeTabContent = false;
 
 document.addEventListener('DOMContentLoaded', initializeSidepanel);
 
@@ -43,11 +47,15 @@ async function initializeSidepanel() {
   advancedModeBtn.addEventListener('click', () => switchMode('advanced'));
   apiModeBtn.addEventListener('click', () => switchMode('api'));
   captureBtn.addEventListener('click', handleCapture);
+  includeTabContentToggle.addEventListener('change', handleIncludeTabToggleChange);
 
   chrome.storage.local.onChanged.addListener(handleStorageChanges);
 
   currentSettings = await StorageUtils.loadSettings();
+  extensionMode = currentSettings.extensionMode || 'developer';
+  applyExtensionMode(extensionMode);
   renderModelOptions(currentSettings);
+  await loadIncludeTabPreference();
   await loadMode();
   await loadApiSession();
   await renderHistory();
@@ -68,8 +76,18 @@ function handleStorageChanges(changes, areaName) {
   if (changes.models || changes.defaultModelId || changes.apiUrl || changes.apiKey) {
     StorageUtils.loadSettings().then((settings) => {
       currentSettings = settings;
+      extensionMode = settings.extensionMode || 'developer';
+      applyExtensionMode(extensionMode);
       renderModelOptions(settings);
     });
+  }
+
+  if (changes.extensionMode) {
+    extensionMode = changes.extensionMode.newValue || 'developer';
+    applyExtensionMode(extensionMode);
+    if (extensionMode === 'user' && currentMode !== 'basic') {
+      switchMode('basic');
+    }
   }
 
   if (changes.storageMetrics) {
@@ -83,6 +101,10 @@ async function loadMode() {
 }
 
 async function switchMode(mode) {
+  if (extensionMode === 'user' && mode !== 'basic') {
+    mode = 'basic';
+  }
+
   currentMode = mode;
   await chrome.storage.local.set({ currentMode: mode });
 
@@ -93,6 +115,16 @@ async function switchMode(mode) {
   basicModeBtn.classList.toggle('active', mode === 'basic');
   advancedModeBtn.classList.toggle('active', mode === 'advanced');
   apiModeBtn.classList.toggle('active', mode === 'api');
+}
+
+function applyExtensionMode(mode) {
+  const isDeveloperMode = mode !== 'user';
+
+  advancedModeBtn.style.display = isDeveloperMode ? 'inline-block' : 'none';
+  apiModeBtn.style.display = isDeveloperMode ? 'inline-block' : 'none';
+  advancedMode.style.display = isDeveloperMode && currentMode === 'advanced' ? 'block' : 'none';
+  apiMode.style.display = isDeveloperMode && currentMode === 'api' ? 'block' : 'none';
+  developerControls.style.display = isDeveloperMode ? 'flex' : 'none';
 }
 
 function renderModelOptions(settings) {
@@ -125,6 +157,10 @@ async function handleRun() {
     const parsed = JSON.parse(text);
     parsed.modelId = getSelectedModelId();
 
+    const requestPayload = includeTabContent
+      ? await attachActiveTabContextToRequest(parsed)
+      : parsed;
+
     showStatus(statusEl, 'Processing request...', 'loading');
     runBtn.disabled = true;
 
@@ -134,7 +170,7 @@ async function handleRun() {
       source: {
         type: 'sidepanel-advanced'
       },
-      data: parsed
+      data: requestPayload
     });
 
     if (!response.success) {
@@ -160,35 +196,54 @@ async function handleCapture() {
     }
 
     captureBtn.disabled = true;
-    showStatus(basicStatus, 'Capturing current tab...', 'loading');
-
-    const tabData = await captureCurrentTab();
-    const request = {
-      agent: 'You are a helpful AI assistant that analyzes web pages using the provided text and screenshots.',
-      name: 'PAGE_ANALYZER',
-      modelId: getSelectedModelId(),
-      params: [{
-        input: question,
-        data: `Page Title: ${tabData.title}\nPage URL: ${tabData.url}\nPage Content: ${tabData.pageText}`,
-        supplements: [
-          { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
-          { type: 'json', label: 'Headings', value: tabData.headings },
-          { type: 'json', label: 'Meta', value: tabData.meta },
-          { type: 'json', label: 'Links', value: tabData.links }
-        ]
-      }]
+    let request = null;
+    let source = {
+      type: 'sidepanel-basic'
     };
 
-    showStatus(basicStatus, 'Sending captured page to the configured model...', 'loading');
+    if (includeTabContent) {
+      showStatus(basicStatus, 'Capturing current tab...', 'loading');
+      const tabData = await captureCurrentTab();
+      request = {
+        agent: 'You are a helpful AI assistant that analyzes web pages using the provided text and screenshots.',
+        name: 'PAGE_ANALYZER',
+        modelId: getSelectedModelId(),
+        params: [{
+          input: question,
+          data: `Page Title: ${tabData.title}\nPage URL: ${tabData.url}\nPage Content: ${tabData.pageText}\nCookies: ${tabData.cookieHeader || '-'}`,
+          supplements: [
+            { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
+            { type: 'json', label: 'Headings', value: tabData.headings },
+            { type: 'json', label: 'Meta', value: tabData.meta },
+            { type: 'json', label: 'Links', value: tabData.links },
+            { type: 'json', label: 'Cookies', value: tabData.cookies || [] }
+          ]
+        }]
+      };
+      source = {
+        type: 'sidepanel-basic',
+        url: tabData.url,
+        title: tabData.title,
+        cookies: tabData.cookies || [],
+        cookieHeader: tabData.cookieHeader || ''
+      };
+      showStatus(basicStatus, 'Sending prompt with active tab context...', 'loading');
+    } else {
+      request = {
+        agent: 'You are a helpful AI assistant.',
+        name: 'CHAT_QUERY',
+        modelId: getSelectedModelId(),
+        params: [{
+          input: question
+        }]
+      };
+      showStatus(basicStatus, 'Sending prompt without active tab context...', 'loading');
+    }
 
     const response = await sendRuntimeMessage({
       command: 'process-request',
       mode: 'basic',
-      source: {
-        type: 'sidepanel-basic',
-        url: tabData.url,
-        title: tabData.title
-      },
+      source,
       data: request
     });
 
@@ -205,6 +260,51 @@ async function handleCapture() {
   } finally {
     captureBtn.disabled = false;
   }
+}
+
+async function loadIncludeTabPreference() {
+  const result = await chrome.storage.local.get(['includeTabContent']);
+  includeTabContent = result.includeTabContent === true;
+  includeTabContentToggle.checked = includeTabContent;
+}
+
+async function handleIncludeTabToggleChange() {
+  includeTabContent = includeTabContentToggle.checked;
+  await chrome.storage.local.set({ includeTabContent });
+}
+
+async function attachActiveTabContextToRequest(requestObject) {
+  const clone = JSON.parse(JSON.stringify(requestObject));
+  const taskList = Array.isArray(clone.params)
+    ? clone.params
+    : Array.isArray(clone.tasks)
+      ? clone.tasks
+      : null;
+
+  if (!taskList || taskList.length === 0) {
+    return clone;
+  }
+
+  const tabData = await captureCurrentTab();
+  taskList.forEach((task) => {
+    if (!task || typeof task !== 'object') {
+      return;
+    }
+    if (!Array.isArray(task.supplements)) {
+      task.supplements = [];
+    }
+    task.supplements.push(
+      { type: 'text', label: 'Active Tab Page Content', text: tabData.pageText || '' },
+      { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
+      { type: 'json', label: 'Active Tab Meta', value: { title: tabData.title, url: tabData.url } },
+      { type: 'json', label: 'Headings', value: tabData.headings || [] },
+      { type: 'json', label: 'Meta', value: tabData.meta || {} },
+      { type: 'json', label: 'Links', value: tabData.links || [] },
+      { type: 'json', label: 'Cookies', value: tabData.cookies || [] }
+    );
+  });
+
+  return clone;
 }
 
 async function loadApiSession() {

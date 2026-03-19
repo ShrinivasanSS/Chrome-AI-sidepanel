@@ -6,9 +6,10 @@ Chrome side panel extension for sending structured and multimodal requests to an
 
 - Global side panel on all sites using Manifest V3 and `<all_urls>`
 - Three entry modes:
-  - `Basic`: capture current tab text plus screenshot
-  - `Advanced`: paste request JSON directly
-  - `API`: receive requests from regular web pages or the JSP sample app
+  - `Developer mode`: `Basic`, `Advanced`, and `API`
+  - `User mode`: `Basic` only (with settings/history still available)
+- Sidepanel input toggle for Basic/Advanced:
+  - `Include Active Tab Content` (default: off)
 - Multiformat request ingestion:
   - Legacy JSON request format
   - Base64/data-URL image payloads
@@ -17,6 +18,7 @@ Chrome side panel extension for sending structured and multimodal requests to an
 - Settings stored in `chrome.storage.local`
 - Multiple configured models with a selectable default model
 - Storage usage display and `Clean Storage` action in settings
+- Skills support from repository-hosted `.skill` packages with periodic background refresh
 
 ## Installation
 
@@ -29,12 +31,62 @@ Chrome side panel extension for sending structured and multimodal requests to an
 
 Open the extension options page and configure:
 
+- `Extension Mode` (`Developer` or `User`)
 - `API Base URL`
 - `API Key`
 - One or more model entries
 - `Default Model`
+- Skills configuration:
+  - `Repository Base URL` (directory listing containing `*.skill` files)
+  - Enable/disable repository source
+  - Auto-refresh toggle + interval (minutes)
+  - Max skills applied per request
+  - Enable/disable individual discovered skills (or all skills)
+  - Manual `Refresh Skills Now` action
+- Processing backend configuration:
+  - `Target`: API or Skill Runner
+  - `Skill Runner`: Claude / Copilot CLI / Cursor
+  - `Runner Location`: Local (native host) or Remote URL
+  - `Remote Runner URL`
+  - `Native Host Name` (for local runner)
+  - `Runner Timeout (ms)`
 
 The extension migrates older single-model settings into the new model list automatically.
+
+## Skills behavior
+
+- Skills are loaded from the configured repository URL.
+- The repository should list files ending with `.skill`.
+- Each `.skill` file is a ZIP package that contains a standard skill folder structure (for example `SKILL.md`, `scripts/`, `references/`, `assets/`).
+- Refresh cadence:
+  - On extension startup
+  - Periodically via `chrome.alarms` (default every 15 minutes)
+  - Manual refresh from settings
+- `skillsState` in local storage tracks:
+  - `lastAttemptAt`
+  - `lastSuccessAt`
+  - source health/errors
+  - catalog summary
+
+`SKILL.md` parsing behavior:
+
+- YAML frontmatter is parsed leniently
+- Required fields are still enforced:
+  - `name`
+  - `description` (or inferred fallback from body text)
+- Invalid skill documents are skipped with warnings instead of failing the whole refresh.
+
+### Example repository layout
+
+```
+http://localhost/skills/repository/
+  a1.skill
+  b2.skill
+```
+
+Notes:
+- The extension fetches the repository URL and discovers all links that end with `.skill`.
+- Every discovered `.skill` package is downloaded and parsed for `SKILL.md`.
 
 ## Supported request formats
 
@@ -128,12 +180,44 @@ The extension always sends OpenAI-compatible chat completion requests:
 
 If a task has no images, the user message is sent as plain text.
 
+During request processing, relevant/selected skills are appended to the effective system prompt so the model can follow specialized instructions.
+
+For sidepanel Basic and Advanced modes:
+- If `Include Active Tab Content` is enabled, the request is enriched with current tab text/screenshot/metadata.
+- If disabled (default), only the typed prompt/request payload is sent.
+
+## Skill runner flow
+
+- If `Target = Skill Runner`, the extension bypasses API chat-completions calls.
+- In User mode, Basic prompt flow sends page context to runner:
+  - page title/url
+  - extracted page text
+  - cookies (`cookieHeader` + JSON list)
+  - selected skill names in context metadata (full skill content is not embedded in prompt)
+- Prompt payload is sent with a `--prompt` style contract:
+  - `runner` (`claude`, `copilot`, `cursor`)
+  - `promptArg` (`--prompt`)
+  - `prompt`
+  - optional context metadata
+- Local runner mode:
+  - uses `chrome.runtime.sendNativeMessage(...)`
+  - requires an installed Native Messaging host that launches the actual CLI binary
+- Remote runner mode:
+  - POSTs JSON to configured runner URL
+  - expects a text response or JSON containing `output`
+
+Reference implementation:
+- `skill-launcher/` contains a compatible backend app with:
+  - HTTP server (`POST /run`, `POST /update-skills`, `GET /health`)
+  - Native Messaging mode for local CLI execution
+
 ## Local storage
 
 The extension stores data only in extension-owned browser storage:
 
 - `IndexedDB`: full conversation input/output history
 - `chrome.storage.local`: settings, current API session, current mode, and storage usage metrics
+  - Includes `extensionMode`, `skillsConfig`, and `skillsState`
 
 The `Clean Storage` button removes stored conversation history and the active API session snapshot.
 
