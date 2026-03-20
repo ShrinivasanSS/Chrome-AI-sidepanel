@@ -36,24 +36,42 @@ def _json_dumps(value: object) -> str:
 
 
 class SkillLauncher:
-    def __init__(self, launcher_root: Path, runner_commands: Optional[Dict[str, List[str]]] = None):
+    def __init__(
+        self,
+        launcher_root: Path,
+        runner_commands: Optional[Dict[str, List[str]]] = None,
+        verbose: bool = False,
+        log_file: Optional[Path] = None,
+    ):
         self.launcher_root = launcher_root.resolve()
         self.launcher_root.mkdir(parents=True, exist_ok=True)
         self.runner_commands = dict(DEFAULT_RUNNER_COMMANDS)
+        self.verbose = bool(verbose)
+        self.log_file = log_file.resolve() if log_file else (self.launcher_root / "skill-launcher.log")
         if runner_commands:
             for key, cmd in runner_commands.items():
                 if isinstance(cmd, list) and all(isinstance(part, str) for part in cmd):
                     self.runner_commands[key] = cmd
+        if self.verbose:
+            self.log_file.parent.mkdir(parents=True, exist_ok=True)
+            self._log("launcher_initialized", {
+                "launcherRoot": str(self.launcher_root),
+                "logFile": str(self.log_file),
+            })
 
     def handle_payload(self, payload: Dict) -> Dict:
+        self._log("incoming_payload", payload)
         action = _normalize_text(payload.get("action"))
         if action == "update-skills":
             runner = _normalize_text(payload.get("runner")) or "claude"
             skills_config = payload.get("skillsConfig") or {}
             summary = self.sync_skills(skills_config, runner)
+            self._log("update_skills_result", summary)
             return {"success": True, "updated": summary}
 
-        return self.run_skill_runner(payload)
+        result = self.run_skill_runner(payload)
+        self._log("run_skill_runner_result", result)
+        return result
 
     def run_skill_runner(self, payload: Dict) -> Dict:
         runner = _normalize_text(payload.get("runner")) or "claude"
@@ -75,6 +93,28 @@ class SkillLauncher:
         env["SKILL_RUNNER_SKILLS_DIR"] = str(skills_dir)
         env["SKILL_RUNNER_WORKDIR"] = str(self.launcher_root)
         env["SKILL_RUNNER_CONTEXT"] = _json_dumps(context)
+        source = context.get("source") if isinstance(context, dict) else {}
+        session_info = {
+            "url": source.get("url"),
+            "title": source.get("title"),
+            "cookies": source.get("cookies", []),
+            "cookieHeader": source.get("cookieHeader", ""),
+            "sessionStorageSnapshot": source.get("sessionStorageSnapshot", {}),
+            "localStorageSnapshot": source.get("localStorageSnapshot", {}),
+            "sessionInfoAllowed": source.get("sessionInfoAllowed", False),
+        }
+        env["SKILL_RUNNER_SESSION_INFO"] = _json_dumps(session_info)
+        log_env = {
+            key: env.get(key, "")
+            for key in ("SKILL_RUNNER_TYPE", "SKILL_RUNNER_SKILLS_DIR", "SKILL_RUNNER_WORKDIR", "SKILL_RUNNER_CONTEXT", "SKILL_RUNNER_SESSION_INFO")
+        }
+        self._log("runner_invocation", {
+            "runner": runner,
+            "promptArg": prompt_arg,
+            "command": command,
+            "timeoutMs": timeout_ms,
+            "env": log_env,
+        })
 
         started = time.time()
         try:
@@ -87,6 +127,7 @@ class SkillLauncher:
                 timeout=max(5, timeout_ms / 1000.0),
             )
         except FileNotFoundError:
+            self._log("runner_error", {"error": "command not found", "command": command})
             return {
                 "success": False,
                 "error": f"Runner command not found: {command[0]}",
@@ -94,6 +135,7 @@ class SkillLauncher:
                 "sync": sync_summary,
             }
         except subprocess.TimeoutExpired:
+            self._log("runner_error", {"error": "timeout", "timeoutMs": timeout_ms, "command": command})
             return {
                 "success": False,
                 "error": f"Runner timed out after {timeout_ms} ms",
@@ -101,6 +143,7 @@ class SkillLauncher:
                 "sync": sync_summary,
             }
         except Exception as exc:
+            self._log("runner_error", {"error": str(exc), "command": command})
             return {
                 "success": False,
                 "error": f"Runner execution failed: {exc}",
@@ -113,6 +156,12 @@ class SkillLauncher:
         stderr = (result.stderr or "").strip()
 
         if result.returncode != 0:
+            self._log("runner_exit_nonzero", {
+                "returncode": result.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "durationMs": duration_ms,
+            })
             return {
                 "success": False,
                 "error": f"Runner exited with code {result.returncode}",
@@ -123,13 +172,15 @@ class SkillLauncher:
                 "durationMs": duration_ms,
             }
 
-        return {
+        success_payload = {
             "success": True,
             "output": stdout or stderr,
             "command": command,
             "sync": sync_summary,
             "durationMs": duration_ms,
         }
+        self._log("runner_exit_success", success_payload)
+        return success_payload
 
     def sync_skills(self, skills_config: Dict, runner: str) -> Dict:
         repository_enabled = bool(skills_config.get("repositoryEnabled", True))
@@ -184,6 +235,7 @@ class SkillLauncher:
         state_file = self._runner_state_file(runner)
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        self._log("skills_sync_state", state)
         return {"status": "ok", **state}
 
     def _runner_skills_dir(self, runner: str) -> Path:
@@ -301,3 +353,17 @@ class SkillLauncher:
             raise RuntimeError(f"HTTP {exc.code}") from exc
         except URLError as exc:
             raise RuntimeError(str(exc)) from exc
+
+    def _log(self, event: str, data: object) -> None:
+        if not self.verbose:
+            return
+        try:
+            payload = {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "event": event,
+                "data": data,
+            }
+            with open(self.log_file, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass

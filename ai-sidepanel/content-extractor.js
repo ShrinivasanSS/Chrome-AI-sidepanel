@@ -127,6 +127,26 @@
   }
 
   // Main extraction function
+  function snapshotStorage(storageObject, maxItems, maxValueLength) {
+    const snapshot = {};
+    try {
+      const length = Math.min(storageObject.length, maxItems);
+      for (let index = 0; index < length; index += 1) {
+        const key = storageObject.key(index);
+        if (!key) {
+          continue;
+        }
+        const value = storageObject.getItem(key);
+        snapshot[key] = typeof value === 'string'
+          ? value.substring(0, maxValueLength)
+          : '';
+      }
+    } catch (error) {
+      snapshot.__error = String(error && error.message ? error.message : error);
+    }
+    return snapshot;
+  }
+
   function extractPageData() {
     return {
       title: document.title,
@@ -136,6 +156,8 @@
       headings: extractHeadings(),
       meta: extractMetaInfo(),
       links: extractLinks(),
+      localStorageSnapshot: snapshotStorage(window.localStorage, 20, 1000),
+      sessionStorageSnapshot: snapshotStorage(window.sessionStorage, 20, 1000),
       timestamp: new Date().toISOString()
     };
   }

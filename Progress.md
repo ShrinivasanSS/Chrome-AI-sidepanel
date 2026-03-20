@@ -189,3 +189,29 @@ Completed:
 - [x] Persist theme in extension settings storage.
 - [x] Flatten `.skill` extraction to `./<runner>/skills/<skillname>/...` so runners discover `SKILL.md` correctly.
 - [x] Invoke launcher `update-skills` from extension service worker during `settings-updated` and `refresh-skills` flows.
+
+#### Follow-up update - Trusted session forwarding controls
+
+Requested change:
+- Add separate sidepanel controls for page content and cookies/session forwarding.
+- Add trusted-domain whitelist in settings for session forwarding.
+- Pass trusted session payload to runner environment.
+
+Completed:
+- [x] Add `Trusted Session Domains` setting and persist whitelist.
+- [x] Add separate sidepanel toggle for `Include Cookies/Session` (default ON) in addition to page-content toggle.
+- [x] Enforce trusted-domain check before forwarding cookies/session snapshots.
+- [x] Capture localStorage/sessionStorage snapshots from active tab and include when allowed.
+- [x] Export runner env var `SKILL_RUNNER_SESSION_INFO` before launching runner command.
+
+#### Follow-up update - Skill launcher verbose logging
+
+Requested change:
+- Add verbose mode to skill-launcher that logs incoming requests, runner env, and outputs to a file.
+
+Completed:
+- [x] Add verbose logging support in launcher core with JSONL log events.
+- [x] Log request lifecycle events: incoming payloads, skills sync results, runner invocation, runner success/failure outputs.
+- [x] Add CLI options `--verbose` and `--log-file` in `skill-launcher/app.py`.
+- [x] Wire verbose/log file options into both remote server and native messaging host modes.
+- [x] Document verbose mode usage and logged events in `skill-launcher/README.md`.

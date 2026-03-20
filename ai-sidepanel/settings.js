@@ -34,6 +34,7 @@ const runnerRemoteUrlEl = document.getElementById('runnerRemoteUrl');
 const runnerNativeHostNameEl = document.getElementById('runnerNativeHostName');
 const runnerTimeoutMsEl = document.getElementById('runnerTimeoutMs');
 const themeModeEl = document.getElementById('themeMode');
+const trustedSessionDomainsEl = document.getElementById('trustedSessionDomains');
 
 const storageTotalEl = document.getElementById('storageTotal');
 const storageHistoryEl = document.getElementById('storageHistory');
@@ -83,6 +84,9 @@ function renderSettings(settings) {
   extensionModeEl.value = settings.extensionMode || 'developer';
   themeModeEl.value = settings.theme || 'light';
   applyTheme(settings.theme || 'light');
+  trustedSessionDomainsEl.value = Array.isArray(settings.trustedSessionDomains)
+    ? settings.trustedSessionDomains.join('\n')
+    : '';
 
   modelsContainerEl.innerHTML = '';
   settings.models.forEach((model) => renderModelRow(model));
@@ -196,6 +200,13 @@ function collectRunnerConfig() {
   };
 }
 
+function collectTrustedDomains() {
+  return trustedSessionDomainsEl.value
+    .split(/[\n,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 async function handleSave(event) {
   event.preventDefault();
 
@@ -210,6 +221,7 @@ async function handleSave(event) {
     apiKey: apiKeyEl.value.trim(),
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
     theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
+    trustedSessionDomains: collectTrustedDomains(),
     models,
     defaultModelId: defaultModelIdEl.value,
     skillsConfig: collectSkillsConfig(),
@@ -248,6 +260,7 @@ async function handleTest() {
       apiKey: apiKeyEl.value.trim(),
       extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
       theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
+      trustedSessionDomains: collectTrustedDomains(),
       models: collectModels(),
       defaultModelId: defaultModelIdEl.value,
       skillsConfig: collectSkillsConfig(),
@@ -454,6 +467,7 @@ function updateExample() {
     apiKey: apiKeyEl.value.trim(),
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
     theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
+    trustedSessionDomains: collectTrustedDomains(),
     models: collectModels(),
     defaultModelId: defaultModelIdEl.value,
     skillsConfig: collectSkillsConfig(),

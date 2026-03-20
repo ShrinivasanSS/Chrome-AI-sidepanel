@@ -135,6 +135,34 @@
     return value === 'dark' ? 'dark' : DEFAULT_THEME;
   }
 
+  function normalizeTrustedDomains(rawDomains) {
+    const source = Array.isArray(rawDomains)
+      ? rawDomains
+      : typeof rawDomains === 'string'
+        ? rawDomains.split(/[\n,]+/)
+        : [];
+
+    const seen = new Set();
+    const normalized = [];
+    source.forEach((entry) => {
+      if (typeof entry !== 'string') {
+        return;
+      }
+      let domain = entry.trim().toLowerCase();
+      domain = domain.replace(/^https?:\/\//, '');
+      domain = domain.split('/')[0];
+      if (!domain) {
+        return;
+      }
+      if (!seen.has(domain)) {
+        seen.add(domain);
+        normalized.push(domain);
+      }
+    });
+
+    return normalized;
+  }
+
   function normalizeSkillsConfig(rawConfig) {
     const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
     const defaults = global.SkillsManager && SkillsManager.DEFAULT_SKILLS_CONFIG
@@ -190,7 +218,8 @@
       extensionMode: normalizeExtensionMode(rawSettings.extensionMode),
       skillsConfig: normalizeSkillsConfig(rawSettings.skillsConfig),
       runnerConfig: normalizeRunnerConfig(rawSettings.runnerConfig),
-      theme: normalizeTheme(rawSettings.theme)
+      theme: normalizeTheme(rawSettings.theme),
+      trustedSessionDomains: normalizeTrustedDomains(rawSettings.trustedSessionDomains)
     };
   }
 
@@ -205,7 +234,8 @@
       'extensionMode',
       'skillsConfig',
       'runnerConfig',
-      'theme'
+      'theme',
+      'trustedSessionDomains'
     ]);
 
     if (
@@ -216,7 +246,8 @@
       localSettings.extensionMode ||
       localSettings.skillsConfig ||
       localSettings.runnerConfig ||
-      localSettings.theme
+      localSettings.theme ||
+      localSettings.trustedSessionDomains
     ) {
       const sanitized = sanitizeSettings(localSettings);
       await chrome.storage.local.set(sanitized);
@@ -245,7 +276,8 @@
       'extensionMode',
       'skillsConfig',
       'runnerConfig',
-      'theme'
+      'theme',
+      'trustedSessionDomains'
     ]);
 
     const hasStructuredSettings = (
@@ -256,7 +288,8 @@
       existing.extensionMode ||
       existing.skillsConfig ||
       existing.runnerConfig ||
-      existing.theme
+      existing.theme ||
+      existing.trustedSessionDomains
     );
     if (!hasStructuredSettings) {
       return migrateLegacySettings();

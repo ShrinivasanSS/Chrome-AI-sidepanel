@@ -4,4 +4,6 @@ skill-launcher/runtime/**
 skill-launcher/.claude/**
 skill-launcher/.copilot/**
 skill-launcher/.cursor/**
+skill-launcher/skill-launcher.log
 **/__pycache__/**
+**/logs/**

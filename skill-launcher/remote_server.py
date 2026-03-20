@@ -52,8 +52,12 @@ class SkillLauncherHandler(BaseHTTPRequestHandler):
         self._write_json(result, status=status)
 
 
-def run_server(host: str, port: int, launcher_root: str) -> None:
-    launcher = SkillLauncher(Path(launcher_root))
+def run_server(host: str, port: int, launcher_root: str, verbose: bool = False, log_file: str = None) -> None:
+    launcher = SkillLauncher(
+        Path(launcher_root),
+        verbose=verbose,
+        log_file=Path(log_file) if log_file else None,
+    )
     handler_type = type("BoundSkillLauncherHandler", (SkillLauncherHandler,), {})
     handler_type.launcher = launcher
     server = ThreadingHTTPServer((host, port), handler_type)

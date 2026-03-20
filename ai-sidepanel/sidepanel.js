@@ -7,6 +7,7 @@ const copyBtn = document.getElementById('copyBtn');
 const modelSelectEl = document.getElementById('modelSelect');
 const developerControls = document.getElementById('developerControls');
 const includeTabContentToggle = document.getElementById('includeTabContentToggle');
+const includeSessionInfoToggle = document.getElementById('includeSessionInfoToggle');
 const historyListEl = document.getElementById('historyList');
 const historyUsageEl = document.getElementById('historyUsage');
 const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
@@ -34,6 +35,7 @@ let currentMode = 'basic';
 let currentSettings = null;
 let extensionMode = 'developer';
 let includeTabContent = false;
+let includeSessionInfo = true;
 
 document.addEventListener('DOMContentLoaded', initializeSidepanel);
 
@@ -48,6 +50,7 @@ async function initializeSidepanel() {
   apiModeBtn.addEventListener('click', () => switchMode('api'));
   captureBtn.addEventListener('click', handleCapture);
   includeTabContentToggle.addEventListener('change', handleIncludeTabToggleChange);
+  includeSessionInfoToggle.addEventListener('change', handleIncludeSessionToggleChange);
 
   chrome.storage.local.onChanged.addListener(handleStorageChanges);
 
@@ -56,7 +59,7 @@ async function initializeSidepanel() {
   applyTheme(currentSettings.theme || 'light');
   applyExtensionMode(extensionMode);
   renderModelOptions(currentSettings);
-  await loadIncludeTabPreference();
+  await loadContextPreferences();
   await loadMode();
   await loadApiSession();
   await renderHistory();
@@ -74,7 +77,7 @@ function handleStorageChanges(changes, areaName) {
     }
   }
 
-  if (changes.models || changes.defaultModelId || changes.apiUrl || changes.apiKey) {
+  if (changes.models || changes.defaultModelId || changes.apiUrl || changes.apiKey || changes.trustedSessionDomains) {
     StorageUtils.loadSettings().then((settings) => {
       currentSettings = settings;
       extensionMode = settings.extensionMode || 'developer';
@@ -167,9 +170,29 @@ async function handleRun() {
     const parsed = JSON.parse(text);
     parsed.modelId = getSelectedModelId();
 
-    const requestPayload = includeTabContent
-      ? await attachActiveTabContextToRequest(parsed)
-      : parsed;
+    let requestPayload = parsed;
+    let source = { type: 'sidepanel-advanced' };
+    if (includeTabContent || includeSessionInfo) {
+      const tabData = await captureCurrentTab();
+      const trusted = isTrustedDomain(tabData.url, currentSettings && currentSettings.trustedSessionDomains);
+      const allowSession = includeSessionInfo && trusted;
+      requestPayload = attachActiveTabContextToRequest(parsed, tabData, {
+        includePageContent: includeTabContent,
+        includeSession: allowSession
+      });
+      source = {
+        type: 'sidepanel-advanced',
+        url: tabData.url,
+        title: tabData.title,
+        ...(allowSession ? {
+          cookies: tabData.cookies || [],
+          cookieHeader: tabData.cookieHeader || '',
+          sessionStorageSnapshot: tabData.sessionStorageSnapshot || {},
+          localStorageSnapshot: tabData.localStorageSnapshot || {}
+        } : {}),
+        sessionInfoAllowed: allowSession
+      };
+    }
 
     showStatus(statusEl, 'Processing request...', 'loading');
     runBtn.disabled = true;
@@ -177,9 +200,7 @@ async function handleRun() {
     const response = await sendRuntimeMessage({
       command: 'process-request',
       mode: 'advanced',
-      source: {
-        type: 'sidepanel-advanced'
-      },
+      source,
       data: requestPayload
     });
 
@@ -211,22 +232,41 @@ async function handleCapture() {
       type: 'sidepanel-basic'
     };
 
-    if (includeTabContent) {
+    if (includeTabContent || includeSessionInfo) {
       showStatus(basicStatus, 'Capturing current tab...', 'loading');
       const tabData = await captureCurrentTab();
+      const trusted = isTrustedDomain(tabData.url, currentSettings && currentSettings.trustedSessionDomains);
+      const allowSession = includeSessionInfo && trusted;
+      const sessionStatus = includeSessionInfo && !trusted
+        ? 'Session info blocked (domain not trusted).'
+        : allowSession
+          ? 'Session info included for trusted domain.'
+          : 'Session info disabled.';
       request = {
         agent: 'You are a helpful AI assistant that analyzes web pages using the provided text and screenshots.',
         name: 'PAGE_ANALYZER',
         modelId: getSelectedModelId(),
         params: [{
           input: question,
-          data: `Page Title: ${tabData.title}\nPage URL: ${tabData.url}\nPage Content: ${tabData.pageText}\nCookies: ${tabData.cookieHeader || '-'}`,
+          data: [
+            `Page Title: ${tabData.title}`,
+            `Page URL: ${tabData.url}`,
+            includeTabContent ? `Page Content: ${tabData.pageText || ''}` : 'Page Content: (not included)',
+            allowSession ? `Cookies: ${tabData.cookieHeader || '-'}` : `Cookies: (not included)`,
+            `Session Info: ${sessionStatus}`
+          ].join('\n'),
           supplements: [
-            { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
-            { type: 'json', label: 'Headings', value: tabData.headings },
-            { type: 'json', label: 'Meta', value: tabData.meta },
-            { type: 'json', label: 'Links', value: tabData.links },
-            { type: 'json', label: 'Cookies', value: tabData.cookies || [] }
+            ...(includeTabContent ? [
+              { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
+              { type: 'json', label: 'Headings', value: tabData.headings },
+              { type: 'json', label: 'Meta', value: tabData.meta },
+              { type: 'json', label: 'Links', value: tabData.links }
+            ] : []),
+            ...(allowSession ? [
+              { type: 'json', label: 'Cookies', value: tabData.cookies || [] },
+              { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
+              { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+            ] : [])
           ]
         }]
       };
@@ -234,10 +274,21 @@ async function handleCapture() {
         type: 'sidepanel-basic',
         url: tabData.url,
         title: tabData.title,
-        cookies: tabData.cookies || [],
-        cookieHeader: tabData.cookieHeader || ''
+        ...(allowSession ? {
+          cookies: tabData.cookies || [],
+          cookieHeader: tabData.cookieHeader || '',
+          sessionStorageSnapshot: tabData.sessionStorageSnapshot || {},
+          localStorageSnapshot: tabData.localStorageSnapshot || {}
+        } : {}),
+        sessionInfoAllowed: allowSession
       };
-      showStatus(basicStatus, 'Sending prompt with active tab context...', 'loading');
+      showStatus(
+        basicStatus,
+        allowSession
+          ? 'Sending prompt with selected page/session context...'
+          : 'Sending prompt (session info skipped for untrusted domain or disabled)...',
+        'loading'
+      );
     } else {
       request = {
         agent: 'You are a helpful AI assistant.',
@@ -272,10 +323,12 @@ async function handleCapture() {
   }
 }
 
-async function loadIncludeTabPreference() {
-  const result = await chrome.storage.local.get(['includeTabContent']);
+async function loadContextPreferences() {
+  const result = await chrome.storage.local.get(['includeTabContent', 'includeSessionInfo']);
   includeTabContent = result.includeTabContent === true;
+  includeSessionInfo = result.includeSessionInfo !== false;
   includeTabContentToggle.checked = includeTabContent;
+  includeSessionInfoToggle.checked = includeSessionInfo;
 }
 
 async function handleIncludeTabToggleChange() {
@@ -283,7 +336,12 @@ async function handleIncludeTabToggleChange() {
   await chrome.storage.local.set({ includeTabContent });
 }
 
-async function attachActiveTabContextToRequest(requestObject) {
+async function handleIncludeSessionToggleChange() {
+  includeSessionInfo = includeSessionInfoToggle.checked;
+  await chrome.storage.local.set({ includeSessionInfo });
+}
+
+function attachActiveTabContextToRequest(requestObject, tabData, options) {
   const clone = JSON.parse(JSON.stringify(requestObject));
   const taskList = Array.isArray(clone.params)
     ? clone.params
@@ -295,7 +353,10 @@ async function attachActiveTabContextToRequest(requestObject) {
     return clone;
   }
 
-  const tabData = await captureCurrentTab();
+  const includePageContent = !!(options && options.includePageContent);
+  const includeSession = !!(options && options.includeSession);
+  const trusted = isTrustedDomain(tabData.url, currentSettings && currentSettings.trustedSessionDomains);
+  const allowSession = includeSession && trusted;
   taskList.forEach((task) => {
     if (!task || typeof task !== 'object') {
       return;
@@ -303,18 +364,46 @@ async function attachActiveTabContextToRequest(requestObject) {
     if (!Array.isArray(task.supplements)) {
       task.supplements = [];
     }
-    task.supplements.push(
-      { type: 'text', label: 'Active Tab Page Content', text: tabData.pageText || '' },
-      { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
-      { type: 'json', label: 'Active Tab Meta', value: { title: tabData.title, url: tabData.url } },
-      { type: 'json', label: 'Headings', value: tabData.headings || [] },
-      { type: 'json', label: 'Meta', value: tabData.meta || {} },
-      { type: 'json', label: 'Links', value: tabData.links || [] },
-      { type: 'json', label: 'Cookies', value: tabData.cookies || [] }
-    );
+    task.supplements.push({ type: 'json', label: 'Active Tab Meta', value: { title: tabData.title, url: tabData.url } });
+    if (includePageContent) {
+      task.supplements.push(
+        { type: 'text', label: 'Active Tab Page Content', text: tabData.pageText || '' },
+        { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
+        { type: 'json', label: 'Headings', value: tabData.headings || [] },
+        { type: 'json', label: 'Meta', value: tabData.meta || {} },
+        { type: 'json', label: 'Links', value: tabData.links || [] }
+      );
+    }
+    if (allowSession) {
+      task.supplements.push(
+        { type: 'json', label: 'Cookies', value: tabData.cookies || [] },
+        { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
+        { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+      );
+    }
   });
 
   return clone;
+}
+
+function isTrustedDomain(url, trustedDomains) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    const list = Array.isArray(trustedDomains) ? trustedDomains : [];
+    return list.some((entry) => {
+      const domain = String(entry || '').trim().toLowerCase();
+      if (!domain) {
+        return false;
+      }
+      if (domain.startsWith('*.')) {
+        const suffix = domain.slice(1);
+        return host.endsWith(suffix);
+      }
+      return host === domain || host.endsWith(`.${domain}`);
+    });
+  } catch (error) {
+    return false;
+  }
 }
 
 async function loadApiSession() {

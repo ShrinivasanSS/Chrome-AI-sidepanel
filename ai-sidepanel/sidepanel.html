@@ -281,9 +281,11 @@
       <div class="toolbar-group">
         <label for="includeTabContentToggle" style="margin: 0; font-weight: 500;">Include Active Tab Content</label>
         <input type="checkbox" id="includeTabContentToggle">
+        <label for="includeSessionInfoToggle" style="margin: 0; font-weight: 500;">Include Cookies/Session</label>
+        <input type="checkbox" id="includeSessionInfoToggle">
       </div>
     </div>
-    <div class="muted">Default is off. When enabled, Basic and Advanced requests include current tab data (text, screenshot, and metadata).</div>
+    <div class="muted">Page-content toggle is off by default. Cookies/session toggle is on by default but only forwarded for trusted domains configured in Settings.</div>
   </div>
 
   <div id="basicMode" class="section-card">

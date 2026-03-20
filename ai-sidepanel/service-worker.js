@@ -292,6 +292,8 @@ function buildRunnerPrompt(agentPrompt, task, context) {
   const source = context && context.source ? context.source : {};
   const cookieHeader = source.cookieHeader || '';
   const cookies = Array.isArray(source.cookies) ? source.cookies : [];
+  const sessionStorageSnapshot = source.sessionStorageSnapshot || {};
+  const localStorageSnapshot = source.localStorageSnapshot || {};
   const sourceBlock = [
     `Mode: ${context.mode || 'unknown'}`,
     `Request: ${context.requestName || 'unknown'}`,
@@ -307,6 +309,8 @@ function buildRunnerPrompt(agentPrompt, task, context) {
     '',
     cookieHeader ? `Cookies (header): ${cookieHeader}` : 'Cookies (header): -',
     cookies.length > 0 ? `Cookies (JSON): ${JSON.stringify(cookies)}` : 'Cookies (JSON): []',
+    `Session Storage Snapshot: ${JSON.stringify(sessionStorageSnapshot)}`,
+    `Local Storage Snapshot: ${JSON.stringify(localStorageSnapshot)}`,
     '',
     'User Task:',
     task.userText
@@ -558,6 +562,8 @@ async function handleTabCapture(sendResponse) {
         meta: pageData.meta,
         headings: pageData.headings,
         links: pageData.links,
+        localStorageSnapshot: pageData.localStorageSnapshot || {},
+        sessionStorageSnapshot: pageData.sessionStorageSnapshot || {},
         cookies,
         cookieHeader
       }

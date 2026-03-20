@@ -10,6 +10,7 @@ Chrome side panel extension for sending structured and multimodal requests to an
   - `User mode`: `Basic` only (with settings/history still available)
 - Sidepanel input toggle for Basic/Advanced:
   - `Include Active Tab Content` (default: off)
+  - `Include Cookies/Session` (default: on, trusted domains only)
 - Multiformat request ingestion:
   - Legacy JSON request format
   - Base64/data-URL image payloads
@@ -33,6 +34,7 @@ Open the extension options page and configure:
 
 - `Theme Mode` (`Light` or `Dark`)
 - `Extension Mode` (`Developer` or `User`)
+- `Trusted Session Domains` (whitelist for forwarding cookies/session storage to runner)
 - `API Base URL`
 - `API Key`
 - One or more model entries
@@ -186,6 +188,7 @@ During request processing, relevant/selected skills are appended to the effectiv
 For sidepanel Basic and Advanced modes:
 - If `Include Active Tab Content` is enabled, the request is enriched with current tab text/screenshot/metadata.
 - If disabled (default), only the typed prompt/request payload is sent.
+- If `Include Cookies/Session` is enabled, cookies + local/session storage snapshots are forwarded only when active tab domain matches trusted-domain whitelist from settings.
 
 ## Skill runner flow
 
@@ -200,6 +203,9 @@ For sidepanel Basic and Advanced modes:
   - `promptArg` (`--prompt`)
   - `prompt`
   - optional context metadata
+- Runner process env includes:
+  - `SKILL_RUNNER_CONTEXT` (full JSON context)
+  - `SKILL_RUNNER_SESSION_INFO` (cookies + storage snapshot JSON for trusted domains)
 - Local runner mode:
   - uses `chrome.runtime.sendNativeMessage(...)`
   - requires an installed Native Messaging host that launches the actual CLI binary

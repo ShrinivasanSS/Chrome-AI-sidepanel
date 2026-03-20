@@ -22,6 +22,9 @@ It supports two interfaces:
 - Executes selected CLI runner (`claude`, `copilot`, or `cursor`) with `--prompt`-style argument
 - Executes runner commands with working directory set to `skill-launcher` root
 - Returns command output back to extension
+- Sets environment variables for runner process:
+  - `SKILL_RUNNER_CONTEXT`
+  - `SKILL_RUNNER_SESSION_INFO` (trusted-domain cookies/session snapshot payload)
 
 ## Run (Remote Mode)
 
@@ -72,6 +75,29 @@ python app.py --mode native
 ```
 
 For Chrome integration, register this script (or packaged executable) as a Native Messaging host and set extension `Native Host Name` to that host id.
+
+## Verbose Logging
+
+Verbose mode writes JSONL diagnostic logs for request/runner lifecycle events.
+
+- Enable with `--verbose`
+- Optional custom path with `--log-file`
+- Default log file: `<launcher-root>/skill-launcher.log`
+
+Examples:
+
+```powershell
+python app.py --mode remote --verbose
+python app.py --mode remote --verbose --log-file "D:\\logs\\skill-launcher.jsonl"
+python app.py --mode native --verbose
+```
+
+Logged events include:
+
+- incoming request payloads (`incoming_payload`)
+- runner invocation command and exported `SKILL_RUNNER_*` env snapshot (`runner_invocation`)
+- skill sync status (`skills_sync_state`, `update_skills_result`)
+- runner stdout/stderr and result status (`runner_exit_success`, `runner_exit_nonzero`, `runner_error`)
 
 ## Command Overrides
 

@@ -83,6 +83,7 @@
 
     input[type="text"],
     input[type="url"],
+    textarea,
     select {
       width: 100%;
       padding: 12px;
@@ -237,6 +238,12 @@
       opacity: 1;
     }
 
+    textarea {
+      min-height: 84px;
+      resize: vertical;
+      font-family: inherit;
+    }
+
     select,
     option {
       color: var(--text);
@@ -269,6 +276,15 @@
             <option value="user">User</option>
           </select>
           <div class="help-text">Developer mode shows Basic/Advanced/API tabs. User mode only shows basic chat/query with settings/history.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Session Sharing</h2>
+        <div class="form-group">
+          <label for="trustedSessionDomains">Trusted Domains (cookies/session can be sent to runner)</label>
+          <textarea id="trustedSessionDomains" placeholder="example.com&#10;*.internal.example.com"></textarea>
+          <div class="help-text">Only these domains can have cookies/session info forwarded when "Include Cookies/Session" is enabled in sidepanel.</div>
         </div>
       </div>
 

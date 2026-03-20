@@ -11,6 +11,16 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7070)
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose JSONL request/runner logging",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Optional log file path (default: <launcher-root>/skill-launcher.log)",
+    )
+    parser.add_argument(
         "--launcher-root",
         default=str(Path(__file__).parent.resolve()),
         help="Root directory for runner workdir and local tool folders (.claude/.copilot/.cursor)",
@@ -23,12 +33,13 @@ def main():
     )
     args = parser.parse_args()
     launcher_root = args.launcher_root_compat or args.launcher_root
+    log_file = args.log_file
 
     if args.mode == "native":
-        run_native_host(launcher_root)
+        run_native_host(launcher_root, verbose=args.verbose, log_file=log_file)
         return
 
-    run_server(args.host, args.port, launcher_root)
+    run_server(args.host, args.port, launcher_root, verbose=args.verbose, log_file=log_file)
 
 
 if __name__ == "__main__":

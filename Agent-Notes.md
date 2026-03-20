@@ -53,3 +53,8 @@ Use this section for reducing repeated searches.
 - Theme support restored via persisted `theme` setting (`light`/`dark`) and applied on both options and sidepanel views via `data-theme`.
 - Launcher sync path bug fixed: skill package extraction is flattened to runner-local directories (`./.claude/skills/<skillname>/...`, etc.), avoiding nested `<skillname>.skill/<skillname>/SKILL.md` layouts that break runner discovery.
 - Service worker now triggers launcher `update-skills` during settings save (`settings-updated`) and manual skills refresh (`refresh-skills`) to keep backend skill cache aligned.
+- Session forwarding is now split from page-content forwarding in sidepanel controls. Cookies/storage are sent only when:
+  - `Include Cookies/Session` toggle is enabled, and
+  - active tab domain matches `trustedSessionDomains` whitelist from settings.
+- Runner environment now receives `SKILL_RUNNER_SESSION_INFO` JSON for trusted session payloads, alongside `SKILL_RUNNER_CONTEXT`.
+- `skill-launcher` verbose diagnostics are now available via `app.py --verbose [--log-file ...]`. Logs are JSONL entries that capture payload intake, skill sync results, runner command/env snapshot (`SKILL_RUNNER_*`), and runner stdout/stderr outcomes for easier debugging across remote and native modes.
