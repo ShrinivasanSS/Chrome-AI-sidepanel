@@ -15,6 +15,10 @@ It supports two interfaces:
   - `./.claude/skills`
   - `./.copilot/skills`
   - `./.cursor/skills`
+- Skill package extraction is flattened so each skill root is directly under runner skills folder:
+  - `./.claude/skills/<skillname>/SKILL.md`
+  - `./.copilot/skills/<skillname>/SKILL.md`
+  - `./.cursor/skills/<skillname>/SKILL.md`
 - Executes selected CLI runner (`claude`, `copilot`, or `cursor`) with `--prompt`-style argument
 - Executes runner commands with working directory set to `skill-launcher` root
 - Returns command output back to extension

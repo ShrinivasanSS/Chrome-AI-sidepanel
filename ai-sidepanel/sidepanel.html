@@ -4,11 +4,29 @@
   <meta charset="utf-8">
   <title>AI Agent Panel</title>
   <style>
+    :root {
+      --bg: #f8f9fa;
+      --text: #202124;
+      --card-bg: #ffffff;
+      --border: #dadce0;
+      --muted: #5f6368;
+      --toolbar-bg: #f8f9fa;
+    }
+
+    [data-theme="dark"] {
+      --bg: #1f2229;
+      --text: #e8eaed;
+      --card-bg: #2a2d35;
+      --border: #4a4f5e;
+      --muted: #b0b6c1;
+      --toolbar-bg: #262932;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       margin: 16px;
-      background-color: #f8f9fa;
-      color: #202124;
+      background-color: var(--bg);
+      color: var(--text);
     }
 
     h1 {
@@ -43,12 +61,12 @@
     .section-title {
       font-weight: 600;
       margin-bottom: 8px;
-      color: #3c4043;
+      color: var(--text);
     }
 
     .section-card {
-      background: white;
-      border: 1px solid #dadce0;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
       border-radius: 12px;
       padding: 16px;
       margin-bottom: 16px;
@@ -112,12 +130,13 @@
       width: 100%;
       min-height: 180px;
       padding: 12px;
-      border: 1px solid #dadce0;
+      border: 1px solid var(--border);
       border-radius: 8px;
       box-sizing: border-box;
       font-family: 'Courier New', monospace;
       font-size: 12px;
-      background-color: #fbfbfc;
+      background-color: var(--toolbar-bg);
+      color: var(--text);
     }
 
     textarea {
@@ -167,10 +186,10 @@
 
     .result-item,
     .history-item {
-      border: 1px solid #dadce0;
+      border: 1px solid var(--border);
       border-radius: 10px;
       overflow: hidden;
-      background: white;
+      background: var(--card-bg);
       margin-top: 10px;
     }
 
@@ -181,7 +200,7 @@
       gap: 8px;
       padding: 12px;
       cursor: pointer;
-      background: #f8f9fa;
+      background: var(--toolbar-bg);
     }
 
     .result-title,
@@ -201,7 +220,7 @@
     .history-content {
       display: none;
       padding: 14px;
-      border-top: 1px solid #dadce0;
+      border-top: 1px solid var(--border);
     }
 
     .expanded {
@@ -233,7 +252,7 @@
     }
 
     .muted {
-      color: #5f6368;
+      color: var(--muted);
       font-size: 12px;
     }
   </style>

@@ -3,7 +3,9 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -151,19 +153,15 @@ class SkillLauncher:
             try:
                 package_bytes = self._http_get_bytes(url)
                 package_name = _safe_name(Path(url.split("?", 1)[0]).name)
-                target_dir = runner_dir / package_name
-                if target_dir.exists():
-                    for sub in sorted(target_dir.rglob("*"), reverse=True):
-                        if sub.is_file():
-                            sub.unlink()
-                        else:
-                            try:
-                                sub.rmdir()
-                            except OSError:
-                                pass
-                target_dir.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix="skillpkg-", dir=str(runner_dir)) as tmp_dir:
+                    tmp_path = Path(tmp_dir)
+                    skill_name, skill_root_dir = self._extract_skill_package(package_bytes, tmp_path)
+                    target_dir = runner_dir / _safe_name(skill_name)
+                    if target_dir.exists():
+                        shutil.rmtree(target_dir, ignore_errors=True)
+                    shutil.copytree(skill_root_dir, target_dir)
+                    skill_path = self._find_skill_file(target_dir)
 
-                skill_name, skill_path = self._extract_skill_package(package_bytes, target_dir)
                 extracted.append(
                     {
                         "url": url,
@@ -248,17 +246,26 @@ class SkillLauncher:
                 resolved.append(full)
         return resolved
 
-    def _extract_skill_package(self, package_bytes: bytes, target_dir: Path) -> Tuple[str, Path]:
+    def _extract_skill_package(self, package_bytes: bytes, extract_dir: Path) -> Tuple[str, Path]:
         with zipfile.ZipFile(io.BytesIO(package_bytes), "r") as archive:
-            self._safe_extract_zip(archive, target_dir)
+            self._safe_extract_zip(archive, extract_dir)
 
-        candidates = list(target_dir.rglob("SKILL.md")) + list(target_dir.rglob("SKILL.MD"))
+        candidates = self._find_skill_candidates(extract_dir)
         if not candidates:
             raise RuntimeError("Package does not contain SKILL.md")
         skill_file = candidates[0]
         text = skill_file.read_text(encoding="utf-8", errors="replace")
         skill_name = self._parse_skill_name(text) or skill_file.parent.name
-        return skill_name, skill_file
+        return skill_name, skill_file.parent
+
+    def _find_skill_candidates(self, root: Path) -> List[Path]:
+        return list(root.rglob("SKILL.md")) + list(root.rglob("SKILL.MD"))
+
+    def _find_skill_file(self, root: Path) -> Path:
+        candidates = self._find_skill_candidates(root)
+        if not candidates:
+            raise RuntimeError(f"No SKILL.md found under {root}")
+        return candidates[0]
 
     def _parse_skill_name(self, content: str) -> Optional[str]:
         if not content.startswith("---"):

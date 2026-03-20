@@ -1,6 +1,12 @@
 # New Workitems 
 
-Mar 16 2026
+Mar 20 2026
+
+- Restore the Theme switching capabilities. Dark/Light theme options missed now. 
+- When skills are copied, they are copied as <name>.skill folder structure. This places SKILL.md inside "./claude/skills/<skillname>.skill/<skillname>/SKILL.md" and makes claude or any runner be oblivious to the skills. A better way would be to just keep the <skillname> folder directly under ./claude/skills (or the equivalent for other runners)
+- When the settings are saved or Refresh skills is called, the backend skill-launcher can be invoked to update or refresh the available skills. 
+
+# Completed workitems - Mar 16 2026
 
 -- (External project integration)
 * The extension should support 'Skills' from a repository or from some build zip (let's say the zip is at http://localhost/skills/latest.zip) and use them while performing agentic actions.

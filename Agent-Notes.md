@@ -50,3 +50,6 @@ Use this section for reducing repeated searches.
   - Basic ON: capture + include page text/screenshot/meta/cookies
   - Advanced OFF: payload unchanged
   - Advanced ON: each task is enriched with captured tab context as supplements
+- Theme support restored via persisted `theme` setting (`light`/`dark`) and applied on both options and sidepanel views via `data-theme`.
+- Launcher sync path bug fixed: skill package extraction is flattened to runner-local directories (`./.claude/skills/<skillname>/...`, etc.), avoiding nested `<skillname>.skill/<skillname>/SKILL.md` layouts that break runner discovery.
+- Service worker now triggers launcher `update-skills` during settings save (`settings-updated`) and manual skills refresh (`refresh-skills`) to keep backend skill cache aligned.

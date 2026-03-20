@@ -33,6 +33,7 @@ const runnerModeEl = document.getElementById('runnerMode');
 const runnerRemoteUrlEl = document.getElementById('runnerRemoteUrl');
 const runnerNativeHostNameEl = document.getElementById('runnerNativeHostName');
 const runnerTimeoutMsEl = document.getElementById('runnerTimeoutMs');
+const themeModeEl = document.getElementById('themeMode');
 
 const storageTotalEl = document.getElementById('storageTotal');
 const storageHistoryEl = document.getElementById('storageHistory');
@@ -59,6 +60,7 @@ async function initializeSettingsPage() {
   clearStorageBtn.addEventListener('click', handleClearStorage);
   apiUrlEl.addEventListener('input', updateExample);
   apiKeyEl.addEventListener('input', updateExample);
+  themeModeEl.addEventListener('change', handleThemeChange);
   processingTargetEl.addEventListener('change', updateExample);
   runnerTypeEl.addEventListener('change', updateExample);
   runnerModeEl.addEventListener('change', updateExample);
@@ -79,6 +81,8 @@ function renderSettings(settings) {
   apiUrlEl.value = settings.apiUrl;
   apiKeyEl.value = settings.apiKey;
   extensionModeEl.value = settings.extensionMode || 'developer';
+  themeModeEl.value = settings.theme || 'light';
+  applyTheme(settings.theme || 'light');
 
   modelsContainerEl.innerHTML = '';
   settings.models.forEach((model) => renderModelRow(model));
@@ -205,6 +209,7 @@ async function handleSave(event) {
     apiUrl: apiUrlEl.value.trim(),
     apiKey: apiKeyEl.value.trim(),
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
+    theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
     models,
     defaultModelId: defaultModelIdEl.value,
     skillsConfig: collectSkillsConfig(),
@@ -213,17 +218,21 @@ async function handleSave(event) {
 
   try {
     saveBtn.disabled = true;
+    let updatedState = null;
     currentSettings = await StorageUtils.saveSettings(settings);
     renderSettings(currentSettings);
     try {
-      await sendRuntimeMessage({ command: 'settings-updated' });
+      const syncResponse = await sendRuntimeMessage({ command: 'settings-updated' });
+      if (syncResponse && syncResponse.success) {
+        updatedState = syncResponse.state || null;
+      }
     } catch (workerError) {
       console.warn('[Settings] Saved settings but background refresh failed:', workerError);
     }
     showStatus('Settings saved.', 'success');
     await Promise.all([
       refreshStorageMetrics(),
-      refreshSkillsState()
+      refreshSkillsState(updatedState)
     ]);
   } catch (error) {
     showStatus(`Failed to save settings: ${error.message}`, 'error');
@@ -238,6 +247,7 @@ async function handleTest() {
       apiUrl: apiUrlEl.value.trim(),
       apiKey: apiKeyEl.value.trim(),
       extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
+      theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
       models: collectModels(),
       defaultModelId: defaultModelIdEl.value,
       skillsConfig: collectSkillsConfig(),
@@ -358,6 +368,15 @@ async function refreshSkillsState(preloadedState) {
   if (state.lastError) {
     errorLines.push(`Last error: ${state.lastError}`);
   }
+  if (state.launcherSync) {
+    if (state.launcherSync.status === 'ok') {
+      errorLines.push(`Launcher sync: ok (${state.launcherSync.mode || 'n/a'})`);
+    } else if (state.launcherSync.status === 'error') {
+      errorLines.push(`Launcher sync error: ${state.launcherSync.error || 'unknown error'}`);
+    } else if (state.launcherSync.status === 'skipped') {
+      errorLines.push(`Launcher sync: skipped (${state.launcherSync.reason || 'n/a'})`);
+    }
+  }
   if (Array.isArray(state.warnings) && state.warnings.length > 0) {
     errorLines.push(`Warnings: ${state.warnings.slice(0, 3).join(' | ')}`);
   }
@@ -434,6 +453,7 @@ function updateExample() {
     apiUrl: apiUrlEl.value.trim(),
     apiKey: apiKeyEl.value.trim(),
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
+    theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
     models: collectModels(),
     defaultModelId: defaultModelIdEl.value,
     skillsConfig: collectSkillsConfig(),
@@ -478,6 +498,14 @@ function updateRunnerFieldVisibility() {
   runnerRemoteUrlEl.disabled = !targetIsRunner || localMode;
   runnerNativeHostNameEl.disabled = !targetIsRunner || !localMode;
   runnerTimeoutMsEl.disabled = !targetIsRunner;
+}
+
+function handleThemeChange() {
+  applyTheme(themeModeEl.value === 'dark' ? 'dark' : 'light');
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : 'light');
 }
 
 function showStatus(message, type) {

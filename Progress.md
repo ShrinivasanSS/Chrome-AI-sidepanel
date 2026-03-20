@@ -176,3 +176,16 @@ Completed:
 - [x] Persist toggle state in `chrome.storage.local` (`includeTabContent`).
 - [x] Basic mode: when ON, capture and include active tab context; when OFF, send only typed prompt.
 - [x] Advanced mode: when ON, enrich tasks with active tab content and metadata; when OFF, send JSON as-is.
+
+#### Follow-up update - Theme + skill sync refinements
+
+Requested change:
+- Restore dark/light theme switching.
+- Flatten copied skill folders under runner skill roots.
+- Invoke backend skill launcher refresh on settings save and manual refresh.
+
+Completed:
+- [x] Add theme mode setting (`light`/`dark`) and apply theme in settings + sidepanel pages.
+- [x] Persist theme in extension settings storage.
+- [x] Flatten `.skill` extraction to `./<runner>/skills/<skillname>/...` so runners discover `SKILL.md` correctly.
+- [x] Invoke launcher `update-skills` from extension service worker during `settings-updated` and `refresh-skills` flows.

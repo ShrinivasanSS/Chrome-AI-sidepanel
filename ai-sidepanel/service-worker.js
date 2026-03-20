@@ -69,7 +69,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === 'refresh-skills') {
     SkillsManager.refreshSkills({ reason: 'manual' }).then(async (state) => {
       await SkillsManager.scheduleRefreshAlarm();
-      sendResponse({ success: true, state });
+      const settings = await StorageUtils.loadSettings();
+      const launcherSync = await syncLauncherSkills(settings);
+      sendResponse({ success: true, state: { ...state, launcherSync } });
     }).catch((error) => {
       sendResponse({ success: false, error: error.message });
     });
@@ -88,8 +90,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === 'settings-updated') {
     SkillsManager.scheduleRefreshAlarm().then(() =>
       SkillsManager.refreshSkills({ reason: 'settings-updated' })
-    ).then((state) => {
-      sendResponse({ success: true, state });
+    ).then(async (state) => {
+      const settings = await StorageUtils.loadSettings();
+      const launcherSync = await syncLauncherSkills(settings);
+      sendResponse({ success: true, state: { ...state, launcherSync } });
     }).catch((error) => {
       sendResponse({ success: false, error: error.message });
     });
@@ -411,6 +415,66 @@ async function invokeRemoteRunner(runnerConfig, prompt, context) {
   }
 
   return response.text();
+}
+
+function buildUpdateSkillsUrl(remoteRunnerUrl) {
+  if (!remoteRunnerUrl) {
+    return '';
+  }
+  if (/\/run\/?$/i.test(remoteRunnerUrl)) {
+    return remoteRunnerUrl.replace(/\/run\/?$/i, '/update-skills');
+  }
+  if (/\/update-skills\/?$/i.test(remoteRunnerUrl)) {
+    return remoteRunnerUrl;
+  }
+  return `${remoteRunnerUrl.replace(/\/$/, '')}/update-skills`;
+}
+
+async function syncLauncherSkills(settings) {
+  const runnerConfig = settings && settings.runnerConfig ? settings.runnerConfig : {};
+  const skillsConfig = settings && settings.skillsConfig ? settings.skillsConfig : {};
+  if (skillsConfig.repositoryEnabled === false) {
+    return { status: 'skipped', reason: 'repository disabled' };
+  }
+
+  const payload = {
+    action: 'update-skills',
+    runner: runnerConfig.runnerType || 'claude',
+    skillsConfig
+  };
+
+  try {
+    if (runnerConfig.runnerMode === 'local') {
+      const hostName = runnerConfig.nativeHostName || 'com.local.skillrunner.host';
+      const response = await sendNativeMessage(hostName, payload);
+      return { status: 'ok', mode: 'local', response };
+    }
+
+    const updateUrl = buildUpdateSkillsUrl(runnerConfig.remoteUrl);
+    if (!updateUrl) {
+      return { status: 'skipped', reason: 'remote URL missing' };
+    }
+
+    const response = await fetch(updateUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { status: 'error', mode: 'remote', error: `HTTP ${response.status}: ${errorText}` };
+    }
+
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) {
+      return { status: 'ok', mode: 'remote', response: await response.json() };
+    }
+
+    return { status: 'ok', mode: 'remote', response: await response.text() };
+  } catch (error) {
+    return { status: 'error', error: error.message };
+  }
 }
 
 async function callAi(settings, model, agentPrompt, task) {

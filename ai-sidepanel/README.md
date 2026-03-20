@@ -31,6 +31,7 @@ Chrome side panel extension for sending structured and multimodal requests to an
 
 Open the extension options page and configure:
 
+- `Theme Mode` (`Light` or `Dark`)
 - `Extension Mode` (`Developer` or `User`)
 - `API Base URL`
 - `API Key`
@@ -205,11 +206,18 @@ For sidepanel Basic and Advanced modes:
 - Remote runner mode:
   - POSTs JSON to configured runner URL
   - expects a text response or JSON containing `output`
+- Runner argument mapping:
+  - Claude: `--print`
+  - Copilot: `--prompt`
+  - Cursor: `agent -p`
 
 Reference implementation:
 - `skill-launcher/` contains a compatible backend app with:
   - HTTP server (`POST /run`, `POST /update-skills`, `GET /health`)
   - Native Messaging mode for local CLI execution
+
+Skill sync trigger behavior:
+- On `Save Settings` and `Refresh Skills` in extension settings, backend launcher `update-skills` is also invoked so runner-local skills are refreshed immediately.
 
 ## Local storage
 

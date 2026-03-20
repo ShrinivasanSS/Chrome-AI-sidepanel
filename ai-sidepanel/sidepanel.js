@@ -53,6 +53,7 @@ async function initializeSidepanel() {
 
   currentSettings = await StorageUtils.loadSettings();
   extensionMode = currentSettings.extensionMode || 'developer';
+  applyTheme(currentSettings.theme || 'light');
   applyExtensionMode(extensionMode);
   renderModelOptions(currentSettings);
   await loadIncludeTabPreference();
@@ -77,9 +78,14 @@ function handleStorageChanges(changes, areaName) {
     StorageUtils.loadSettings().then((settings) => {
       currentSettings = settings;
       extensionMode = settings.extensionMode || 'developer';
+      applyTheme(settings.theme || 'light');
       applyExtensionMode(extensionMode);
       renderModelOptions(settings);
     });
+  }
+
+  if (changes.theme) {
+    applyTheme(changes.theme.newValue || 'light');
   }
 
   if (changes.extensionMode) {
@@ -125,6 +131,10 @@ function applyExtensionMode(mode) {
   advancedMode.style.display = isDeveloperMode && currentMode === 'advanced' ? 'block' : 'none';
   apiMode.style.display = isDeveloperMode && currentMode === 'api' ? 'block' : 'none';
   developerControls.style.display = isDeveloperMode ? 'flex' : 'none';
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : 'light');
 }
 
 function renderModelOptions(settings) {

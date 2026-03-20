@@ -33,6 +33,8 @@
     timeoutMs: 120000
   };
 
+  const DEFAULT_THEME = 'light';
+
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -129,6 +131,10 @@
     return value === 'user' ? 'user' : 'developer';
   }
 
+  function normalizeTheme(value) {
+    return value === 'dark' ? 'dark' : DEFAULT_THEME;
+  }
+
   function normalizeSkillsConfig(rawConfig) {
     const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
     const defaults = global.SkillsManager && SkillsManager.DEFAULT_SKILLS_CONFIG
@@ -183,7 +189,8 @@
       storageMetrics: normalizeStorageMetrics(rawSettings.storageMetrics),
       extensionMode: normalizeExtensionMode(rawSettings.extensionMode),
       skillsConfig: normalizeSkillsConfig(rawSettings.skillsConfig),
-      runnerConfig: normalizeRunnerConfig(rawSettings.runnerConfig)
+      runnerConfig: normalizeRunnerConfig(rawSettings.runnerConfig),
+      theme: normalizeTheme(rawSettings.theme)
     };
   }
 
@@ -197,7 +204,8 @@
       'storageMetrics',
       'extensionMode',
       'skillsConfig',
-      'runnerConfig'
+      'runnerConfig',
+      'theme'
     ]);
 
     if (
@@ -207,7 +215,8 @@
       localSettings.defaultModelId ||
       localSettings.extensionMode ||
       localSettings.skillsConfig ||
-      localSettings.runnerConfig
+      localSettings.runnerConfig ||
+      localSettings.theme
     ) {
       const sanitized = sanitizeSettings(localSettings);
       await chrome.storage.local.set(sanitized);
@@ -235,7 +244,8 @@
       'storageMetrics',
       'extensionMode',
       'skillsConfig',
-      'runnerConfig'
+      'runnerConfig',
+      'theme'
     ]);
 
     const hasStructuredSettings = (
@@ -245,7 +255,8 @@
       existing.defaultModelId ||
       existing.extensionMode ||
       existing.skillsConfig ||
-      existing.runnerConfig
+      existing.runnerConfig ||
+      existing.theme
     );
     if (!hasStructuredSettings) {
       return migrateLegacySettings();
@@ -340,6 +351,7 @@
     DEFAULT_STORAGE_METRICS: clone(DEFAULT_STORAGE_METRICS),
     DEFAULT_SKILLS_CONFIG: clone(DEFAULT_SKILLS_CONFIG),
     DEFAULT_RUNNER_CONFIG: clone(DEFAULT_RUNNER_CONFIG),
+    DEFAULT_THEME,
     loadSettings,
     saveSettings,
     sanitizeSettings,
