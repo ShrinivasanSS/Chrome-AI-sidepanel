@@ -193,19 +193,24 @@ For sidepanel Basic and Advanced modes:
 ## Skill runner flow
 
 - If `Target = Skill Runner`, the extension bypasses API chat-completions calls.
-- In User mode, Basic prompt flow sends page context to runner:
-  - page title/url
-  - extracted page text
-  - cookies (`cookieHeader` + JSON list)
-  - selected skill names in context metadata (full skill content is not embedded in prompt)
-- Prompt payload is sent with a `--prompt` style contract:
+- In User mode, Basic prompt flow sends structured JSON context to runner host:
+  - `runnerInput.userMessage` + `runnerInput.normalizedTaskText`
+  - `runnerInput.sessionInfo` (cookies + storage snapshots)
+  - `runnerInput.skills` (selected skill metadata)
+  - `runnerInput.pageContent` (page text/headings/meta/links when enabled)
+  - `runnerInput.request` + `runnerInput.source` metadata
+- Extension no longer builds a monolithic runner prompt string in skill-runner mode.
+- Host payload includes:
   - `runner` (`claude`, `copilot`, `cursor`)
-  - `promptArg` (`--prompt`)
-  - `prompt`
+  - `promptArg` (runner-specific, for backward compatibility)
+  - `runnerInput` (structured contract)
   - optional context metadata
+- Skill launcher builds the final CLI prompt from `runnerInput` and injects session-aware usage guidance.
 - Runner process env includes:
   - `SKILL_RUNNER_CONTEXT` (full JSON context)
   - `SKILL_RUNNER_SESSION_INFO` (cookies + storage snapshot JSON for trusted domains)
+  - `SKILL_RUNNER_COOKIE_HEADER` (raw cookie header)
+  - `SKILL_RUNNER_COOKIES_JSON` (cookie list JSON)
 - Local runner mode:
   - uses `chrome.runtime.sendNativeMessage(...)`
   - requires an installed Native Messaging host that launches the actual CLI binary

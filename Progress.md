@@ -215,3 +215,26 @@ Completed:
 - [x] Add CLI options `--verbose` and `--log-file` in `skill-launcher/app.py`.
 - [x] Wire verbose/log file options into both remote server and native messaging host modes.
 - [x] Document verbose mode usage and logged events in `skill-launcher/README.md`.
+
+## Date - 20/Mar/2026
+
+### AI generated updates
+
+#### Proposed checklist - Structured runner payload + launcher-side context assembly
+
+Requested change:
+- In skill-runner mode, stop flattening all context into one text prompt in extension.
+- Send structured JSON payload to skill-launcher (user message, session info, selected skills, page content, metadata).
+- Build final runner prompt/context in skill-launcher and set cookie/session env there.
+- Include explicit instructions for using session details via env cookies (for curl/playwright style usage).
+
+Planned work items:
+- [x] Define a stable structured contract for runner invocation payload (extension -> launcher), including `userMessage`, `sessionInfo`, `pageContent`, `source`, and `skills`.
+- [x] Refactor `ai-sidepanel/service-worker.js` runner path to send structured payload fields in skill-runner mode instead of pre-composed monolithic prompt text.
+- [x] Update `skill-launcher` request parsing to accept the structured payload for both remote and native flows.
+- [x] Move prompt assembly logic into launcher core so runner-specific prompt text is generated server-side.
+- [x] Ensure launcher sets/extends session env variables from structured session payload (including cookies header/json and storage snapshots) before invoking Claude/Copilot/Cursor.
+- [x] Add default runner instructions in launcher prompt assembly to guide use of env session details for authenticated curl/playwright operations.
+- [x] Keep non skill-runner API mode behavior unchanged.
+- [x] Update `ai-sidepanel/README.md` and `skill-launcher/README.md` to document the structured runner contract and launcher-built context behavior.
+- [x] Add implementation notes/edge cases discovered during this refactor to `Agent-Notes.md`.

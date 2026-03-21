@@ -58,3 +58,6 @@ Use this section for reducing repeated searches.
   - active tab domain matches `trustedSessionDomains` whitelist from settings.
 - Runner environment now receives `SKILL_RUNNER_SESSION_INFO` JSON for trusted session payloads, alongside `SKILL_RUNNER_CONTEXT`.
 - `skill-launcher` verbose diagnostics are now available via `app.py --verbose [--log-file ...]`. Logs are JSONL entries that capture payload intake, skill sync results, runner command/env snapshot (`SKILL_RUNNER_*`), and runner stdout/stderr outcomes for easier debugging across remote and native modes.
+- Skill-runner contract now supports structured `runnerInput` from extension (`userMessage`, `sessionInfo`, `skills`, `pageContent`, `request/source metadata`) so extension no longer needs to flatten all context into one prompt string.
+- Prompt construction for CLI runners is now centralized in `skill-launcher` (`launcher_core.py`). This makes remote/native behavior consistent and keeps per-runner guidance in one place.
+- Launcher now exports cookie/session helpers beyond `SKILL_RUNNER_SESSION_INFO`: `SKILL_RUNNER_COOKIE_HEADER` and `SKILL_RUNNER_COOKIES_JSON`. This improves scriptability for authenticated `curl` and browser automation flows.

@@ -288,44 +288,57 @@ async function processRequestLifecycle(options) {
   };
 }
 
-function buildRunnerPrompt(agentPrompt, task, context) {
-  const source = context && context.source ? context.source : {};
-  const cookieHeader = source.cookieHeader || '';
+function buildRunnerInput(agentPrompt, task, context) {
+  const safeContext = context && typeof context === 'object' ? context : {};
+  const source = safeContext.source && typeof safeContext.source === 'object' ? safeContext.source : {};
+  const selectedSkills = Array.isArray(safeContext.selectedSkills) ? safeContext.selectedSkills : [];
   const cookies = Array.isArray(source.cookies) ? source.cookies : [];
   const sessionStorageSnapshot = source.sessionStorageSnapshot || {};
   const localStorageSnapshot = source.localStorageSnapshot || {};
-  const sourceBlock = [
-    `Mode: ${context.mode || 'unknown'}`,
-    `Request: ${context.requestName || 'unknown'}`,
-    `Source URL: ${source.url || 'unknown'}`,
-    `Source Title: ${source.title || 'unknown'}`
-  ].join('\n');
+  const taskImages = Array.isArray(task && task.images) ? task.images : [];
 
-  return [
-    agentPrompt,
-    '',
-    'Context:',
-    sourceBlock,
-    '',
-    cookieHeader ? `Cookies (header): ${cookieHeader}` : 'Cookies (header): -',
-    cookies.length > 0 ? `Cookies (JSON): ${JSON.stringify(cookies)}` : 'Cookies (JSON): []',
-    `Session Storage Snapshot: ${JSON.stringify(sessionStorageSnapshot)}`,
-    `Local Storage Snapshot: ${JSON.stringify(localStorageSnapshot)}`,
-    '',
-    'User Task:',
-    task.userText
-  ].join('\n');
+  return {
+    request: {
+      mode: safeContext.mode || 'unknown',
+      requestName: safeContext.requestName || 'unknown',
+      model: safeContext.model || 'unknown'
+    },
+    agentInstructions: agentPrompt || '',
+    userMessage: task && typeof task.input === 'string' ? task.input : '',
+    taskInput: task && typeof task.input === 'string' ? task.input : '',
+    normalizedTaskText: task && typeof task.userText === 'string' ? task.userText : '',
+    taskImages,
+    skills: selectedSkills,
+    source: {
+      type: source.type || 'unknown',
+      url: source.url || '',
+      title: source.title || ''
+    },
+    pageContent: {
+      text: source.pageText || '',
+      headings: Array.isArray(source.headings) ? source.headings : [],
+      meta: source.meta || {},
+      links: Array.isArray(source.links) ? source.links : []
+    },
+    sessionInfo: {
+      cookies,
+      cookieHeader: source.cookieHeader || '',
+      sessionStorageSnapshot,
+      localStorageSnapshot,
+      sessionInfoAllowed: !!source.sessionInfoAllowed
+    }
+  };
 }
 
 async function callSkillRunner(settings, agentPrompt, task, context) {
   const runnerConfig = settings.runnerConfig || {};
-  const prompt = buildRunnerPrompt(agentPrompt, task, context || {});
+  const runnerInput = buildRunnerInput(agentPrompt, task, context || {});
 
   if (runnerConfig.runnerMode === 'local') {
-    return invokeLocalRunner(runnerConfig, prompt, context || {});
+    return invokeLocalRunner(runnerConfig, runnerInput, context || {});
   }
 
-  return invokeRemoteRunner(runnerConfig, prompt, context || {});
+  return invokeRemoteRunner(runnerConfig, runnerInput, context || {});
 }
 
 function getRunnerPromptArg(runnerType) {
@@ -351,14 +364,14 @@ function sendNativeMessage(hostName, message) {
   });
 }
 
-async function invokeLocalRunner(runnerConfig, prompt, context) {
+async function invokeLocalRunner(runnerConfig, runnerInput, context) {
   const hostName = runnerConfig.nativeHostName || 'com.local.skillrunner.host';
   const promptArg = getRunnerPromptArg(runnerConfig.runnerType);
   const response = await sendNativeMessage(hostName, {
     action: 'run-skill-runner',
     runner: runnerConfig.runnerType || 'claude',
     promptArg,
-    prompt,
+    runnerInput,
     timeoutMs: runnerConfig.timeoutMs || 120000,
     skillsConfig: context && context.skillsConfig ? context.skillsConfig : null,
     context
@@ -379,7 +392,7 @@ async function invokeLocalRunner(runnerConfig, prompt, context) {
   return JSON.stringify(response);
 }
 
-async function invokeRemoteRunner(runnerConfig, prompt, context) {
+async function invokeRemoteRunner(runnerConfig, runnerInput, context) {
   const remoteUrl = runnerConfig.remoteUrl;
   if (!remoteUrl) {
     throw new Error('Remote runner URL is not configured');
@@ -394,7 +407,7 @@ async function invokeRemoteRunner(runnerConfig, prompt, context) {
     body: JSON.stringify({
       runner: runnerConfig.runnerType || 'claude',
       promptArg,
-      prompt,
+      runnerInput,
       timeoutMs: runnerConfig.timeoutMs || 120000,
       skillsConfig: context && context.skillsConfig ? context.skillsConfig : null,
       context

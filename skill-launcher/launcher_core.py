@@ -80,6 +80,10 @@ class SkillLauncher:
         timeout_ms = int(payload.get("timeoutMs") or 120000)
         context = payload.get("context") or {}
         skills_config = payload.get("skillsConfig") or {}
+        runner_input = payload.get("runnerInput") if isinstance(payload.get("runnerInput"), dict) else {}
+
+        if runner_input:
+            prompt = self._build_prompt_from_runner_input(runner_input)
 
         if not prompt:
             return {"success": False, "error": "Missing prompt"}
@@ -93,20 +97,27 @@ class SkillLauncher:
         env["SKILL_RUNNER_SKILLS_DIR"] = str(skills_dir)
         env["SKILL_RUNNER_WORKDIR"] = str(self.launcher_root)
         env["SKILL_RUNNER_CONTEXT"] = _json_dumps(context)
-        source = context.get("source") if isinstance(context, dict) else {}
-        session_info = {
-            "url": source.get("url"),
-            "title": source.get("title"),
-            "cookies": source.get("cookies", []),
-            "cookieHeader": source.get("cookieHeader", ""),
-            "sessionStorageSnapshot": source.get("sessionStorageSnapshot", {}),
-            "localStorageSnapshot": source.get("localStorageSnapshot", {}),
-            "sessionInfoAllowed": source.get("sessionInfoAllowed", False),
-        }
+        session_info = self._build_session_info(runner_input, context)
+        cookie_header = _normalize_text(session_info.get("cookieHeader"))
+        cookies = session_info.get("cookies")
+        if not isinstance(cookies, list):
+            cookies = []
+            session_info["cookies"] = cookies
         env["SKILL_RUNNER_SESSION_INFO"] = _json_dumps(session_info)
+        env["SKILL_RUNNER_COOKIE_HEADER"] = cookie_header
+        env["SKILL_RUNNER_COOKIES_JSON"] = _json_dumps(cookies)
+        env["SKILL_RUNNER_INPUT"] = _json_dumps(runner_input or {})
         log_env = {
             key: env.get(key, "")
-            for key in ("SKILL_RUNNER_TYPE", "SKILL_RUNNER_SKILLS_DIR", "SKILL_RUNNER_WORKDIR", "SKILL_RUNNER_CONTEXT", "SKILL_RUNNER_SESSION_INFO")
+            for key in (
+                "SKILL_RUNNER_TYPE",
+                "SKILL_RUNNER_SKILLS_DIR",
+                "SKILL_RUNNER_WORKDIR",
+                "SKILL_RUNNER_CONTEXT",
+                "SKILL_RUNNER_SESSION_INFO",
+                "SKILL_RUNNER_COOKIE_HEADER",
+                "SKILL_RUNNER_COOKIES_JSON",
+            )
         }
         self._log("runner_invocation", {
             "runner": runner,
@@ -181,6 +192,136 @@ class SkillLauncher:
         }
         self._log("runner_exit_success", success_payload)
         return success_payload
+
+    def _build_session_info(self, runner_input: Dict, context: Dict) -> Dict:
+        session_info = {}
+        if isinstance(runner_input, dict):
+            candidate = runner_input.get("sessionInfo")
+            if isinstance(candidate, dict):
+                session_info = dict(candidate)
+
+        source = context.get("source") if isinstance(context, dict) else {}
+        if not isinstance(source, dict):
+            source = {}
+
+        if not session_info:
+            session_info = {
+                "cookies": source.get("cookies", []),
+                "cookieHeader": source.get("cookieHeader", ""),
+                "sessionStorageSnapshot": source.get("sessionStorageSnapshot", {}),
+                "localStorageSnapshot": source.get("localStorageSnapshot", {}),
+                "sessionInfoAllowed": source.get("sessionInfoAllowed", False),
+            }
+
+        session_info["url"] = session_info.get("url") or source.get("url")
+        session_info["title"] = session_info.get("title") or source.get("title")
+        if not isinstance(session_info.get("cookies"), list):
+            session_info["cookies"] = []
+        if not isinstance(session_info.get("sessionStorageSnapshot"), dict):
+            session_info["sessionStorageSnapshot"] = {}
+        if not isinstance(session_info.get("localStorageSnapshot"), dict):
+            session_info["localStorageSnapshot"] = {}
+        session_info["cookieHeader"] = _normalize_text(session_info.get("cookieHeader"))
+        session_info["sessionInfoAllowed"] = bool(session_info.get("sessionInfoAllowed"))
+        return session_info
+
+    def _build_prompt_from_runner_input(self, runner_input: Dict) -> str:
+        request = runner_input.get("request") if isinstance(runner_input.get("request"), dict) else {}
+        source = runner_input.get("source") if isinstance(runner_input.get("source"), dict) else {}
+        page_content = runner_input.get("pageContent") if isinstance(runner_input.get("pageContent"), dict) else {}
+        session_info = runner_input.get("sessionInfo") if isinstance(runner_input.get("sessionInfo"), dict) else {}
+        skills = runner_input.get("skills")
+        if not isinstance(skills, list):
+            skills = []
+        task_images = runner_input.get("taskImages")
+        if not isinstance(task_images, list):
+            task_images = []
+
+        user_message = _normalize_text(runner_input.get("userMessage"))
+        task_input = _normalize_text(runner_input.get("taskInput"))
+        normalized_task_text = _normalize_text(runner_input.get("normalizedTaskText"))
+        agent_instructions = _normalize_text(runner_input.get("agentInstructions"))
+
+        session_allowed = bool(session_info.get("sessionInfoAllowed"))
+        cookie_header = _normalize_text(session_info.get("cookieHeader"))
+        session_guidance = [
+            "Session handling guidance:",
+            "- If authenticated access is required, first check SKILL_RUNNER_COOKIE_HEADER.",
+            "- You can use curl with the cookie header: curl -H \"Cookie: <value from SKILL_RUNNER_COOKIE_HEADER>\" <url>.",
+            "- For Playwright/browser automation, parse SKILL_RUNNER_SESSION_INFO JSON and reuse cookies from sessionInfo.cookies.",
+            "- Treat cookies/session as sensitive and avoid echoing full secrets in output.",
+        ]
+        if not session_allowed:
+            session_guidance.append("- Session info is not trusted/allowed for this request; continue without authenticated cookie replay.")
+        elif not cookie_header:
+            session_guidance.append("- Session forwarding is allowed, but cookie header is currently empty.")
+
+        sections = [
+            "You are running inside the skill launcher contract.",
+            "",
+            "Request metadata:",
+            _json_dumps({
+                "mode": request.get("mode"),
+                "requestName": request.get("requestName"),
+                "model": request.get("model"),
+                "source": {
+                    "type": source.get("type"),
+                    "url": source.get("url"),
+                    "title": source.get("title"),
+                }
+            }),
+            "",
+            "Selected skills:",
+            _json_dumps(skills),
+            "",
+            "Page content:",
+            _json_dumps({
+                "text": page_content.get("text", ""),
+                "headings": page_content.get("headings", []),
+                "meta": page_content.get("meta", {}),
+                "links": page_content.get("links", []),
+            }),
+            "",
+            "Session info:",
+            _json_dumps(session_info),
+            "",
+            "\n".join(session_guidance),
+            "",
+        ]
+
+        if agent_instructions:
+            sections.extend([
+                "Agent instructions:",
+                agent_instructions,
+                "",
+            ])
+
+        if task_input:
+            sections.extend([
+                "Task input:",
+                task_input,
+                "",
+            ])
+
+        if task_images:
+            sections.extend([
+                "Task images:",
+                _json_dumps(task_images),
+                "",
+            ])
+
+        if normalized_task_text:
+            sections.extend([
+                "Normalized task payload:",
+                normalized_task_text,
+                "",
+            ])
+
+        sections.extend([
+            "User message:",
+            user_message or "(empty user message)",
+        ])
+        return "\n".join(sections)
 
     def sync_skills(self, skills_config: Dict, runner: str) -> Dict:
         repository_enabled = bool(skills_config.get("repositoryEnabled", True))

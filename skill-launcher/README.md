@@ -9,7 +9,7 @@ It supports two interfaces:
 
 ## Features
 
-- Receives runner payload from extension (`runner`, `promptArg`, `prompt`, `timeoutMs`, `context`, `skillsConfig`)
+- Receives runner payload from extension (`runner`, `promptArg`, `runnerInput`, `timeoutMs`, `context`, `skillsConfig`)
 - Syncs `.skill` packages from configured repository URL before each run
 - Extracts packages into local per-runner folders under `skill-launcher`:
   - `./.claude/skills`
@@ -22,9 +22,14 @@ It supports two interfaces:
 - Executes selected CLI runner (`claude`, `copilot`, or `cursor`) with `--prompt`-style argument
 - Executes runner commands with working directory set to `skill-launcher` root
 - Returns command output back to extension
+- Builds final runner prompt text from structured `runnerInput` JSON contract
+- Adds built-in runner guidance for authenticated `curl`/Playwright flows using env-provided cookies/session
 - Sets environment variables for runner process:
   - `SKILL_RUNNER_CONTEXT`
   - `SKILL_RUNNER_SESSION_INFO` (trusted-domain cookies/session snapshot payload)
+  - `SKILL_RUNNER_COOKIE_HEADER`
+  - `SKILL_RUNNER_COOKIES_JSON`
+  - `SKILL_RUNNER_INPUT`
 
 ## Run (Remote Mode)
 
@@ -47,17 +52,31 @@ Run endpoint:
 ```json
 {
   "runner": "claude",
-  "promptArg": "--prompt",
-  "prompt": "Analyze this page context...",
+  "promptArg": "--print",
   "timeoutMs": 120000,
   "skillsConfig": {
     "repositoryEnabled": true,
     "repositoryUrl": "http://localhost/skills/repository"
   },
-  "context": {
-    "source": {
-      "url": "https://example.com"
+  "runnerInput": {
+    "request": { "mode": "basic", "requestName": "PAGE_ANALYZER", "model": "gpt-4o-mini" },
+    "agentInstructions": "You are a helpful AI assistant.",
+    "userMessage": "Task: find namespaces...",
+    "taskInput": "find namespaces",
+    "normalizedTaskText": "Task: find namespaces...\n\nData:\n...",
+    "skills": [{ "name": "example-skill", "source": "repository" }],
+    "source": { "type": "sidepanel-basic", "url": "https://example.com", "title": "Example" },
+    "pageContent": { "text": "", "headings": [], "meta": {}, "links": [] },
+    "sessionInfo": {
+      "cookies": [],
+      "cookieHeader": "",
+      "sessionStorageSnapshot": {},
+      "localStorageSnapshot": {},
+      "sessionInfoAllowed": false
     }
+  },
+  "context": {
+    "source": { "url": "https://example.com" }
   }
 }
 ```

@@ -184,6 +184,12 @@ async function handleRun() {
         type: 'sidepanel-advanced',
         url: tabData.url,
         title: tabData.title,
+        ...(includeTabContent ? {
+          pageText: tabData.pageText || '',
+          headings: tabData.headings || [],
+          meta: tabData.meta || {},
+          links: tabData.links || []
+        } : {}),
         ...(allowSession ? {
           cookies: tabData.cookies || [],
           cookieHeader: tabData.cookieHeader || '',
@@ -274,6 +280,12 @@ async function handleCapture() {
         type: 'sidepanel-basic',
         url: tabData.url,
         title: tabData.title,
+        ...(includeTabContent ? {
+          pageText: tabData.pageText || '',
+          headings: tabData.headings || [],
+          meta: tabData.meta || {},
+          links: tabData.links || []
+        } : {}),
         ...(allowSession ? {
           cookies: tabData.cookies || [],
           cookieHeader: tabData.cookieHeader || '',
