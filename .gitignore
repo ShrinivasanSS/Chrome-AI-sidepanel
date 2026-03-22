@@ -8,3 +8,5 @@ skill-launcher/skill-launcher.log
 **/__pycache__/**
 **/logs/**
 **/task-runs/**
+**/samples/**
+**/temp/**
