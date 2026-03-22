@@ -267,6 +267,55 @@ Status:
 - Implementation completed by AI on 22/Mar/2026.
 - Human validation pending.
 
+#### Follow-up update - UI task/history split + formatted/raw views
+
+Requested change:
+- Completed tasks should move from Current Tasks to History tab.
+- Add Formatted (markdown) and Raw JSON toggle views for completed results.
+- Fix auto-refresh breaking expand/collapse state.
+
+Completed:
+- [x] Current Tasks tab now shows only queued/running jobs. Completed/failed/timed_out jobs appear in History.
+- [x] When a job finishes, view auto-switches to History tab with the job expanded.
+- [x] Each completed runner job in History has "Formatted" / "Raw JSON" toggle buttons.
+- [x] Formatted view renders response text via MarkdownRenderer. Raw view shows full JSON output.
+- [x] Expand/collapse state is tracked in `expandedHistoryIds` Set and preserved across auto-refresh re-renders.
+- [x] View mode per job tracked in `taskResultViewMode` and preserved across re-renders.
+
+#### Follow-up update - Self-contained skills + ultra-slim prompt
+
+Requested change:
+- Eliminate shared/ dependency and AGENT_SHARED_PATH — skill scripts should be fully self-contained in their scripts/ directory.
+- Cookies should only be in env vars, never in the CLI prompt. Claude should not waste time parsing cookie/session metadata.
+- Prompt should contain only: user message + page content (if sent) + skill usage instructions.
+
+Completed:
+- [x] Moved `site24x7_client.py` into `alert-validation/scripts/` directory alongside `script.py`. No more external shared path needed.
+- [x] Updated `script.py` to import `site24x7_client` from its own directory via `sys.path.insert(0, _scripts_dir)`.
+- [x] `site24x7_client.py` now has a `_resolve_cookie_header()` function that reads cookies from env vars in priority order: `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN` → `<DOMAIN>_COOKIES` → `SKILL_RUNNER_COOKIE_HEADER`.
+- [x] Ultra-slim prompt: rewrote `_build_prompt_from_runner_input` to contain only skill names + page URL/title + page text (truncated to 4KB) + user message. ~10-15 lines total.
+- [x] No cookies, session data, agent instructions, active tab metadata, or request metadata in CLI prompt — all in env vars only.
+- [x] Prompt tells runner: "Read SKILL.md files for instructions. Cookies for API calls are in environment variables (used by scripts automatically)."
+
+#### Follow-up update - Domain auto-detection + curl guidance in prompt
+
+Requested change:
+- Claude prompt should instruct the runner to check env vars before making curl requests.
+- Eliminate manual SITE24X7_DOMAIN config — derive it from the active browser tab.
+- Pass active tab origin as env var so scripts and runner know the target domain.
+
+Completed:
+- [x] Prompt now includes curl guidance: "echo $SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN" before making authenticated requests.
+- [x] Prompt includes active tab URL + derived origin.
+- [x] Launcher auto-sets `SKILL_RUNNER_SOURCE_ORIGIN` from active tab URL.
+- [x] Launcher auto-sets `SITE24X7_DOMAIN` when active tab is on any site24x7 domain (`.com`, `.eu`, `.cn`, `.in`, etc.).
+- [x] `site24x7_client.py` now has `_derive_site24x7_domain()` that checks `SITE24X7_DOMAIN` → `SKILL_RUNNER_SOURCE_ORIGIN` → `SKILL_RUNNER_SOURCE_URL` — zero manual config needed.
+- [x] Updated `Agent-Notes.md` with findings.
+
+Status:
+- Implementation completed by AI on 22/Mar/2026.
+- Human validation pending.
+
 #### Follow-up update - Runner payload slimming + CPU optimization
 
 Requested change:
@@ -282,3 +331,26 @@ Completed:
 - [x] Reduced polling pressure (`1s -> 2s`) for runner task status checks in extension and launcher wait loops.
 - [x] Reduced extension storage churn by persisting lean queue state and keeping heavy runtime payloads in memory during execution.
 - [x] Added per-task launch command artifact in `task-runs/<task-id>/launch-command.json` and included its path in `result.json`.
+
+#### Follow-up update - Skill/shared compatibility + slim prompt
+
+Requested change:
+- Fix env var consistency between launcher and skill scripts (scripts expect `AGENT_SHARED_PATH`, `SKILL_RUNNER_COOKIE_HEADER`, domain-mapped cookies).
+- Reduce CLI prompt size — move all bulk data to env vars, only pass user message + brief context in `--print` arg.
+- Support shared library packages (`shared.zip`) alongside `.skill` packages in repository.
+
+Completed:
+- [x] Slim prompt: rewrote `_build_prompt_from_runner_input` to emit ~30 lines (system preamble with env var reference + user message/task input only). All bulk data (cookies, session, page content, agent instructions, active tab, skills metadata, task images) moved to env vars.
+- [x] New `_export_structured_env` method sets `SKILL_RUNNER_AGENT_INSTRUCTIONS`, `SKILL_RUNNER_PAGE_CONTENT_JSON`, `SKILL_RUNNER_ACTIVE_TAB_JSON`, `SKILL_RUNNER_SESSION_INFO_JSON`, `SKILL_RUNNER_SESSION_ALLOWED`, `SKILL_RUNNER_SELECTED_SKILLS_JSON`, `SKILL_RUNNER_TASK_IMAGES_JSON`, plus `SKILL_RUNNER_REQUEST_*` and `SKILL_RUNNER_SOURCE_*` metadata.
+- [x] Launcher now sets `SKILL_RUNNER_COOKIE_HEADER` (active-tab cookie header string) — previously missing, required by `site24x7_client.py`.
+- [x] Launcher now sets `AGENT_SHARED_PATH` pointing to `<runner>/shared/` — previously missing, required by `base_script.py` and skill scripts.
+- [x] New `_discover_repo_urls` discovers both `.skill` and `shared.zip` packages from repository listings (JSON `"shared"` array, or HTML/text links with `shared` in name + `.zip` extension).
+- [x] New `_extract_shared_package` extracts shared ZIP contents into `<runner>/shared/`, handling single top-level wrapper directory stripping (e.g. `shared/base_script.py` → `<runner>/shared/base_script.py`).
+- [x] `sync_skills` now extracts shared packages before skill packages.
+- [x] Full prompt saved to `task-runs/<task-id>/prompt.txt` for debugging.
+- [x] Updated `skill-launcher/README.md` with full env var reference and shared library docs.
+- [x] Updated `Agent-Notes.md` with implementation findings.
+
+Status:
+- Implementation completed by AI on 22/Mar/2026.
+- Human validation pending.

@@ -25,10 +25,24 @@ It supports two interfaces:
 - Persists per-task artifacts under `task-runs/<task-id>/` (`request.json`, `stdout.txt`, `stderr.txt`, `result.json`)
 - Builds final runner prompt text from structured `runnerInput` JSON contract
 - Adds built-in runner guidance for authenticated `curl`/Playwright flows using env-provided cookies/session
-- Sets environment variables for runner process:
-  - `SKILL_RUNNER_COOKIES_JSON`
-  - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN`
-  - domain mapped vars (for example `LOCALHOST_COOKIES`) as JSON-formatted strings, plus `*_JSON`
+- Discovers and extracts shared library packages (`shared.zip`) alongside `.skill` packages
+- Shared libraries are extracted to `<runner>/shared/` and exposed via `AGENT_SHARED_PATH` env var
+- Sets environment variables for runner process (all bulk data is in env, prompt stays small):
+  - `AGENT_SHARED_PATH` — path to shared Python libraries used by skill scripts
+  - `SKILL_RUNNER_COOKIE_HEADER` — active-tab cookie header string
+  - `SKILL_RUNNER_COOKIES_JSON` — active-tab cookie array
+  - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN` — JSON `{domain: cookieHeader}`
+  - `SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON` — JSON `{domain: [cookies]}`
+  - `<DOMAIN>_COOKIES` / `<DOMAIN>_COOKIES_JSON` — per-domain cookie data
+  - `SKILL_RUNNER_AGENT_INSTRUCTIONS` — full agent/system prompt instructions
+  - `SKILL_RUNNER_PAGE_CONTENT_JSON` — page text, headings, meta, links
+  - `SKILL_RUNNER_ACTIVE_TAB_JSON` — active tab URL, title, meta
+  - `SKILL_RUNNER_SESSION_INFO_JSON` — full session/cookie/storage info
+  - `SKILL_RUNNER_SESSION_ALLOWED` — `1` or `0`
+  - `SKILL_RUNNER_SELECTED_SKILLS_JSON` — selected skill metadata
+  - `SKILL_RUNNER_TASK_IMAGES_JSON` — task image attachments (if any)
+  - `SKILL_RUNNER_REQUEST_MODE`, `SKILL_RUNNER_REQUEST_NAME`, `SKILL_RUNNER_REQUEST_MODEL`
+  - `SKILL_RUNNER_SOURCE_TYPE`, `SKILL_RUNNER_SOURCE_URL`, `SKILL_RUNNER_SOURCE_TITLE`
 
 ## Run (Remote Mode)
 
@@ -151,11 +165,12 @@ python app.py --mode remote --launcher-root .
 
 ## Runtime Data
 
-Extracted skills and state are stored under runner-local folders in launcher root:
+Extracted skills, shared libraries, and state are stored under runner-local folders in launcher root:
 
-- `skill-launcher/.claude/skills/` and `skill-launcher/.claude/skills-state.json`
-- `skill-launcher/.copilot/skills/` and `skill-launcher/.copilot/skills-state.json`
-- `skill-launcher/.cursor/skills/` and `skill-launcher/.cursor/skills-state.json`
+- `skill-launcher/.claude/skills/` — extracted skill packages
+- `skill-launcher/.claude/shared/` — shared Python libraries (from `shared.zip`)
+- `skill-launcher/.claude/skills-state.json` — sync state
+- Same structure for `.copilot/` and `.cursor/`
 
 If you need a different root, use:
 

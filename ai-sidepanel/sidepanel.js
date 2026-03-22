@@ -47,6 +47,9 @@ let currentRunnerJobs = [];
 let activeBottomView = 'tasks';
 let activeJobByMode = { basic: null, advanced: null };
 const deliveredJobResults = new Set();
+const expandedTaskIds = new Set();
+const expandedHistoryIds = new Set();
+let taskResultViewMode = {};  // jobId -> 'markdown' | 'raw'
 
 document.addEventListener('DOMContentLoaded', initializeSidepanel);
 
@@ -569,58 +572,37 @@ async function refreshRunnerJobs() {
 }
 
 function renderRunnerJobs(jobs) {
-  const active = jobs.filter((job) =>
-    job.status === 'queued' || job.status === 'running' || job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out'
-  );
+  // Only show queued and running jobs in Current Tasks.
+  // Completed/failed/timed_out jobs are shown in History tab.
+  const active = jobs.filter((job) => job.status === 'queued' || job.status === 'running');
 
-  tasksUsageEl.textContent = `${active.length} task(s) in queue/history window`;
+  tasksUsageEl.textContent = `${active.length} active task(s)`;
 
   if (active.length === 0) {
-    tasksListEl.innerHTML = '<div class="muted">No current tasks.</div>';
+    tasksListEl.innerHTML = '<div class="muted">No active tasks. Completed tasks appear in the History tab.</div>';
     return;
   }
 
   tasksListEl.innerHTML = '';
-  active.forEach((job, index) => {
+  active.forEach((job) => {
     const item = document.createElement('div');
     item.className = 'task-item';
     const timerText = buildJobTimerText(job);
-    const details = (job.output && job.output.response) || job.responses || [];
+    const progress = job.progress || {};
     item.innerHTML = `
       <div class="task-header">
         <div class="task-title">${escapeHtml(job.requestName || 'Runner Task')}</div>
         <div class="task-meta">${escapeHtml(job.status)}${job.queuePosition ? ` · Queue ${job.queuePosition}` : ''}</div>
-        <div class="task-toggle">${(job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out') ? 'Expand' : timerText}</div>
+        <div class="task-toggle">${timerText}</div>
       </div>
-      <div class="task-content">
+      <div class="task-content expanded">
         <div class="muted">Mode: ${escapeHtml(job.mode || '-')} · Runner: ${escapeHtml((job.runner && job.runner.type) || '-')} (${escapeHtml((job.runner && job.runner.mode) || '-')})</div>
         <div class="muted">Created: ${job.createdAt ? new Date(job.createdAt).toLocaleString() : '-'}</div>
         <div class="muted">Started: ${job.startedAt ? new Date(job.startedAt).toLocaleString() : '-'}</div>
-        <div class="muted">Finished: ${job.finishedAt ? new Date(job.finishedAt).toLocaleString() : '-'}</div>
-        <div class="muted">Progress: ${(job.progress && job.progress.completed) || 0}/${(job.progress && job.progress.total) || 0}</div>
+        <div class="muted">Progress: ${progress.completed || 0}/${progress.total || 0}${progress.input ? ' — ' + escapeHtml(progress.input) : ''}</div>
         ${job.error ? `<div class="muted" style="color:#c5221f;">${escapeHtml(job.error)}</div>` : ''}
-        <div class="section-title" style="margin-top: 12px;">Results</div>
-        <pre>${escapeHtml(JSON.stringify(details, null, 2))}</pre>
       </div>
     `;
-
-    const header = item.querySelector('.task-header');
-    const content = item.querySelector('.task-content');
-    const toggle = item.querySelector('.task-toggle');
-    header.addEventListener('click', () => {
-      const expandable = job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out';
-      if (!expandable) {
-        return;
-      }
-      const expanded = content.classList.toggle('expanded');
-      toggle.textContent = expanded ? 'Collapse' : 'Expand';
-    });
-
-    if (index === 0 && (job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out')) {
-      content.classList.add('expanded');
-      toggle.textContent = 'Collapse';
-    }
-
     tasksListEl.appendChild(item);
   });
 }
@@ -685,12 +667,17 @@ function syncTrackedJobStatuses() {
     }
 
     if (job.status === 'completed') {
-      showStatus(statusNode, `Runner job completed (${(output.response || []).length} task result(s)).`, 'success');
+      showStatus(statusNode, `Runner job completed (${(output.response || []).length} task result(s)). See History tab.`, 'success');
     } else if (job.status === 'timed_out') {
-      showStatus(statusNode, `Runner job timed out.`, 'error');
+      showStatus(statusNode, `Runner job timed out. See History tab.`, 'error');
     } else {
-      showStatus(statusNode, `Runner job finished with errors.`, 'error');
+      showStatus(statusNode, `Runner job finished with errors. See History tab.`, 'error');
     }
+
+    // Auto-expand completed job in history and switch to history view
+    expandedHistoryIds.add(job.id);
+    taskResultViewMode[job.id] = 'markdown';
+    switchActivityView('history');
     renderHistory();
   });
 }
@@ -710,47 +697,173 @@ async function renderHistory() {
 
   updateHistoryUsage(metrics);
 
-  if (conversations.length === 0) {
-    historyListEl.innerHTML = '<div class="muted">No conversations stored yet.</div>';
+  // Merge completed runner jobs into history view
+  const completedJobs = currentRunnerJobs.filter((job) =>
+    job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out'
+  );
+
+  // Build unified list: completed runner jobs first (newest first), then stored conversations
+  const historyItems = [];
+
+  completedJobs.forEach((job) => {
+    historyItems.push({
+      id: job.id,
+      type: 'runner-job',
+      title: job.requestName || 'Runner Task',
+      meta: `${job.status} · ${job.mode || '-'} · ${(job.runner && job.runner.type) || '-'}`,
+      createdAt: job.createdAt,
+      finishedAt: job.finishedAt,
+      source: job.source,
+      error: job.error,
+      responses: (job.output && job.output.response) || job.responses || [],
+      rawOutput: job.output || { response: job.responses || [] },
+      durationMs: job.finishedAt && job.startedAt
+        ? new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
+        : null,
+      job
+    });
+  });
+
+  conversations.forEach((entry) => {
+    historyItems.push({
+      id: entry.id || entry.createdAt,
+      type: 'conversation',
+      title: entry.requestName,
+      meta: `${entry.mode} · ${entry.model}`,
+      createdAt: entry.createdAt,
+      source: entry.source,
+      requestData: entry.requestData,
+      outputData: entry.outputData
+    });
+  });
+
+  if (historyItems.length === 0) {
+    historyListEl.innerHTML = '<div class="muted">No history yet.</div>';
     return;
   }
 
   historyListEl.innerHTML = '';
 
-  conversations.forEach((entry, index) => {
+  historyItems.forEach((entry, index) => {
+    const itemId = entry.id || `history-${index}`;
+    const isExpanded = expandedHistoryIds.has(itemId) || (index === 0 && expandedHistoryIds.size === 0);
+
     const item = document.createElement('div');
     item.className = 'history-item';
-    item.innerHTML = `
-      <div class="history-header">
-        <div class="history-title">${entry.requestName}</div>
-        <div class="history-meta">${entry.mode} · ${entry.model}</div>
-        <div class="history-toggle">Expand</div>
-      </div>
-      <div class="history-content">
-        <div class="muted">Stored ${new Date(entry.createdAt).toLocaleString()}</div>
-        <div class="muted">Source: ${entry.source && entry.source.url ? entry.source.url : entry.source && entry.source.type ? entry.source.type : 'unknown'}</div>
-        <div class="section-title" style="margin-top: 12px;">Request</div>
-        <pre>${escapeHtml(JSON.stringify(entry.requestData, null, 2))}</pre>
-        <div class="section-title" style="margin-top: 12px;">Output</div>
-        <pre>${escapeHtml(JSON.stringify(entry.outputData, null, 2))}</pre>
-      </div>
-    `;
+
+    if (entry.type === 'runner-job') {
+      const viewMode = taskResultViewMode[itemId] || 'markdown';
+      const responses = entry.responses || [];
+      const durationText = entry.durationMs ? ` · ${formatDuration(entry.durationMs)}` : '';
+
+      item.innerHTML = `
+        <div class="history-header">
+          <div class="history-title">${escapeHtml(entry.title)}</div>
+          <div class="history-meta">${escapeHtml(entry.meta)}${durationText}</div>
+          <div class="history-toggle">${isExpanded ? 'Collapse' : 'Expand'}</div>
+        </div>
+        <div class="history-content${isExpanded ? ' expanded' : ''}">
+          <div class="muted">${entry.finishedAt ? new Date(entry.finishedAt).toLocaleString() : '-'}</div>
+          ${entry.error ? `<div class="muted" style="color:#c5221f;">${escapeHtml(entry.error)}</div>` : ''}
+          <div class="toolbar" style="margin-top: 8px; margin-bottom: 8px;">
+            <button class="mode-btn view-markdown-btn ${viewMode === 'markdown' ? 'active' : ''}" style="padding: 4px 10px; font-size: 12px;">Formatted</button>
+            <button class="mode-btn view-raw-btn ${viewMode === 'raw' ? 'active' : ''}" style="padding: 4px 10px; font-size: 12px;">Raw JSON</button>
+          </div>
+          <div class="history-result-container"></div>
+        </div>
+      `;
+
+      const resultContainer = item.querySelector('.history-result-container');
+      renderJobResultView(resultContainer, responses, entry.rawOutput, viewMode);
+
+      const markdownBtn = item.querySelector('.view-markdown-btn');
+      const rawBtn = item.querySelector('.view-raw-btn');
+      markdownBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        taskResultViewMode[itemId] = 'markdown';
+        markdownBtn.classList.add('active');
+        rawBtn.classList.remove('active');
+        renderJobResultView(resultContainer, responses, entry.rawOutput, 'markdown');
+      });
+      rawBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        taskResultViewMode[itemId] = 'raw';
+        rawBtn.classList.add('active');
+        markdownBtn.classList.remove('active');
+        renderJobResultView(resultContainer, responses, entry.rawOutput, 'raw');
+      });
+
+    } else {
+      // Stored conversation
+      item.innerHTML = `
+        <div class="history-header">
+          <div class="history-title">${escapeHtml(entry.title)}</div>
+          <div class="history-meta">${escapeHtml(entry.meta)}</div>
+          <div class="history-toggle">${isExpanded ? 'Collapse' : 'Expand'}</div>
+        </div>
+        <div class="history-content${isExpanded ? ' expanded' : ''}">
+          <div class="muted">Stored ${new Date(entry.createdAt).toLocaleString()}</div>
+          <div class="muted">Source: ${entry.source && entry.source.url ? entry.source.url : entry.source && entry.source.type ? entry.source.type : 'unknown'}</div>
+          <div class="section-title" style="margin-top: 12px;">Request</div>
+          <pre>${escapeHtml(JSON.stringify(entry.requestData, null, 2))}</pre>
+          <div class="section-title" style="margin-top: 12px;">Output</div>
+          <pre>${escapeHtml(JSON.stringify(entry.outputData, null, 2))}</pre>
+        </div>
+      `;
+    }
 
     const header = item.querySelector('.history-header');
     const content = item.querySelector('.history-content');
     const toggle = item.querySelector('.history-toggle');
     header.addEventListener('click', () => {
-      const expanded = content.classList.toggle('expanded');
-      toggle.textContent = expanded ? 'Collapse' : 'Expand';
+      const nowExpanded = content.classList.toggle('expanded');
+      toggle.textContent = nowExpanded ? 'Collapse' : 'Expand';
+      if (nowExpanded) {
+        expandedHistoryIds.add(itemId);
+      } else {
+        expandedHistoryIds.delete(itemId);
+      }
     });
 
-    if (index === 0) {
-      content.classList.add('expanded');
-      toggle.textContent = 'Collapse';
+    // Track initial expand state
+    if (isExpanded) {
+      expandedHistoryIds.add(itemId);
     }
 
     historyListEl.appendChild(item);
   });
+}
+
+function renderJobResultView(container, responses, rawOutput, viewMode) {
+  container.innerHTML = '';
+  if (viewMode === 'raw') {
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(rawOutput, null, 2);
+    container.appendChild(pre);
+  } else {
+    // Markdown / formatted view
+    if (!responses || responses.length === 0) {
+      container.innerHTML = '<div class="muted">No results.</div>';
+      return;
+    }
+    responses.forEach((result) => {
+      const responseText = typeof result.response === 'string' ? result.response : JSON.stringify(result.response);
+      const renderedContent = result.success && window.MarkdownRenderer
+        ? MarkdownRenderer.render(responseText)
+        : escapeHtml(responseText);
+
+      const resultEl = document.createElement('div');
+      resultEl.className = 'result-item';
+      resultEl.innerHTML = `
+        <div class="result-header" style="cursor: default;">
+          <div>${result.success ? '✓' : '✗'}</div>
+          <div class="result-title">${escapeHtml(result.input || '')}</div>
+        </div>
+        <div class="result-content expanded markdown-content">${renderedContent}</div>
+      `;
+      container.appendChild(resultEl);
+    });
+  }
 }
 
 function updateHistoryUsage(metrics) {

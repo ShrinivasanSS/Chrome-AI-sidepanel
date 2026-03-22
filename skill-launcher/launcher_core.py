@@ -17,9 +17,10 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_RUNNER_COMMANDS = {
-    "claude": ["claude", "--print", "{prompt}"],
+    "claude": ["claude", "--dangerously-skip-permissions","--print", "{prompt}"],
     "copilot": ["copilot", "--prompt", "{prompt}"],
-    "cursor": ["cursor", "agent", "-p", "{prompt}"],
+    "cursor": ["agent", "-p", "{prompt}"],
+    "cline": ["cline", "-v", "task", "{prompt}"],
 }
 
 
@@ -251,21 +252,25 @@ class SkillLauncher:
         task_dir = self.tasks_root / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         request_file = task_dir / "request.json"
+        prompt_file = task_dir / "prompt.txt"
         stdout_file = task_dir / "stdout.txt"
         stderr_file = task_dir / "stderr.txt"
         result_file = task_dir / "result.json"
         command_file = task_dir / "launch-command.json"
         request_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        prompt_file.write_text(prompt, encoding="utf-8")
 
         sync_summary = self._sync_skills_cached(skills_config, runner)
         command = self._build_command(runner, prompt_arg, prompt)
         skills_dir = self._runner_skills_dir(runner)
+        shared_dir = self._runner_shared_dir(runner)
         command_file.write_text(json.dumps({
             "taskId": task_id,
             "runner": runner,
             "promptArg": prompt_arg,
             "command": command,
             "commandText": " ".join(shlex.quote(part) for part in command),
+            "promptFile": str(prompt_file),
             "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }, indent=2), encoding="utf-8")
 
@@ -273,13 +278,39 @@ class SkillLauncher:
         env["SKILL_RUNNER_TYPE"] = runner
         env["SKILL_RUNNER_SKILLS_DIR"] = str(skills_dir)
         env["SKILL_RUNNER_WORKDIR"] = str(self.launcher_root)
+
+        # Set AGENT_SHARED_PATH for skill scripts that import shared libraries
+        if shared_dir.exists():
+            env["AGENT_SHARED_PATH"] = str(shared_dir)
+
+        # Export structured data as env vars (keeps prompt small)
+        self._export_structured_env(env, runner_input, context)
+
+        # Export cookie/session env vars
         session_info = self._build_session_info(runner_input, context)
         cookies = session_info.get("cookies")
         if not isinstance(cookies, list):
             cookies = []
             session_info["cookies"] = cookies
         env["SKILL_RUNNER_COOKIES_JSON"] = _json_dumps(cookies)
+
+        # Set SKILL_RUNNER_COOKIE_HEADER (active-tab cookie header for legacy/compat)
+        cookie_header = _normalize_text(session_info.get("cookieHeader"))
+        if cookie_header:
+            env["SKILL_RUNNER_COOKIE_HEADER"] = cookie_header
+
         self._export_domain_cookie_envs(env, session_info)
+
+        # Export standard request headers for curl/python usage
+        request_headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-GB,en;q=0.5",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+        }
+        env["SKILL_RUNNER_REQUEST_HEADERS_JSON"] = _json_dumps(request_headers)
 
         log_env = {
             key: env.get(key, "")
@@ -287,8 +318,11 @@ class SkillLauncher:
                 "SKILL_RUNNER_TYPE",
                 "SKILL_RUNNER_SKILLS_DIR",
                 "SKILL_RUNNER_WORKDIR",
+                "AGENT_SHARED_PATH",
+                "SKILL_RUNNER_COOKIE_HEADER",
                 "SKILL_RUNNER_COOKIES_JSON",
                 "SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN",
+                "SKILL_RUNNER_SESSION_ALLOWED",
             )
         }
         self._log("runner_invocation", {
@@ -463,6 +497,71 @@ class SkillLauncher:
         env["SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN"] = _json_dumps(normalized_headers)
         env["SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON"] = _json_dumps(normalized_cookies)
 
+    def _export_structured_env(self, env: Dict[str, str], runner_input: Dict, context: Dict):
+        """Export bulk structured data as env vars so the CLI prompt stays small."""
+        if not isinstance(runner_input, dict):
+            runner_input = {}
+        if not isinstance(context, dict):
+            context = {}
+
+        # Request metadata
+        request = runner_input.get("request") if isinstance(runner_input.get("request"), dict) else {}
+        env["SKILL_RUNNER_REQUEST_MODE"] = _normalize_text(request.get("mode"))
+        env["SKILL_RUNNER_REQUEST_NAME"] = _normalize_text(request.get("requestName"))
+        env["SKILL_RUNNER_REQUEST_MODEL"] = _normalize_text(request.get("model"))
+
+        # Source / active tab info + derive origin for scripts
+        source = runner_input.get("source") if isinstance(runner_input.get("source"), dict) else {}
+        source_url = _normalize_text(source.get("url"))
+        env["SKILL_RUNNER_SOURCE_TYPE"] = _normalize_text(source.get("type"))
+        env["SKILL_RUNNER_SOURCE_URL"] = source_url
+        env["SKILL_RUNNER_SOURCE_TITLE"] = _normalize_text(source.get("title"))
+
+        # Derive origin (scheme + hostname) from source URL for domain-specific scripts
+        if source_url:
+            try:
+                from urllib.parse import urlparse
+                parsed_url = urlparse(source_url)
+                if parsed_url.hostname:
+                    origin = f"{parsed_url.scheme}://{parsed_url.hostname}"
+                    env["SKILL_RUNNER_SOURCE_ORIGIN"] = origin
+                    # Auto-set SITE24X7_DOMAIN if the active tab is on a site24x7 domain
+                    hostname_lower = parsed_url.hostname.lower()
+                    if "site24x7" in hostname_lower:
+                        # e.g. site24x7.com, site24x7.eu, site24x7.cn, site24x7.in
+                        # Derive the www base: https://www.site24x7.eu
+                        tld = hostname_lower.split("site24x7")[-1].lstrip(".")
+                        site24x7_domain = f"https://www.site24x7.{tld}" if tld else "https://www.site24x7.com"
+                        env["SITE24X7_DOMAIN"] = site24x7_domain
+            except Exception:
+                pass
+
+        active_tab = runner_input.get("activeTabInfo") if isinstance(runner_input.get("activeTabInfo"), dict) else {}
+        env["SKILL_RUNNER_ACTIVE_TAB_JSON"] = _json_dumps(active_tab)
+
+        # Page content (full text, headings, meta, links) — exported as JSON env var
+        page_content = runner_input.get("pageContent") if isinstance(runner_input.get("pageContent"), dict) else {}
+        env["SKILL_RUNNER_PAGE_CONTENT_JSON"] = _json_dumps(page_content)
+
+        # Session info (full object for scripts that need it)
+        session_info = runner_input.get("sessionInfo") if isinstance(runner_input.get("sessionInfo"), dict) else {}
+        env["SKILL_RUNNER_SESSION_INFO_JSON"] = _json_dumps(session_info)
+        env["SKILL_RUNNER_SESSION_ALLOWED"] = "1" if session_info.get("sessionInfoAllowed") else "0"
+
+        # Selected skills metadata
+        skills = runner_input.get("skills") if isinstance(runner_input.get("skills"), list) else []
+        env["SKILL_RUNNER_SELECTED_SKILLS_JSON"] = _json_dumps(skills)
+
+        # Agent instructions (can be large)
+        agent_instructions = _normalize_text(runner_input.get("agentInstructions"))
+        if agent_instructions:
+            env["SKILL_RUNNER_AGENT_INSTRUCTIONS"] = agent_instructions
+
+        # Task images list
+        task_images = runner_input.get("taskImages") if isinstance(runner_input.get("taskImages"), list) else []
+        if task_images:
+            env["SKILL_RUNNER_TASK_IMAGES_JSON"] = _json_dumps(task_images)
+
     def _build_session_info(self, runner_input: Dict, context: Dict) -> Dict:
         session_info = {}
         if isinstance(runner_input, dict):
@@ -505,103 +604,76 @@ class SkillLauncher:
         return session_info
 
     def _build_prompt_from_runner_input(self, runner_input: Dict) -> str:
-        request = runner_input.get("request") if isinstance(runner_input.get("request"), dict) else {}
+        """Build an ultra-slim prompt for CLI runners (claude --print).
+
+        DESIGN PRINCIPLES:
+        - Only the user's question and page content go in the prompt.
+        - Cookies, session data, metadata are in env vars only (for scripts/curl).
+        - Skill names are listed so the runner knows which SKILL.md files to use.
+        - Active tab origin is included so the runner knows the target domain.
+        - Brief curl guidance so runner can make authenticated requests without scripts.
+        """
         source = runner_input.get("source") if isinstance(runner_input.get("source"), dict) else {}
         page_content = runner_input.get("pageContent") if isinstance(runner_input.get("pageContent"), dict) else {}
-        active_tab_info = runner_input.get("activeTabInfo") if isinstance(runner_input.get("activeTabInfo"), dict) else {}
-        session_info = runner_input.get("sessionInfo") if isinstance(runner_input.get("sessionInfo"), dict) else {}
         skills = runner_input.get("skills")
         if not isinstance(skills, list):
             skills = []
-        task_images = runner_input.get("taskImages")
-        if not isinstance(task_images, list):
-            task_images = []
 
         user_message = _normalize_text(runner_input.get("userMessage"))
         task_input = _normalize_text(runner_input.get("taskInput"))
-        agent_instructions = _normalize_text(runner_input.get("agentInstructions"))
 
-        session_allowed = bool(session_info.get("sessionInfoAllowed"))
-        session_guidance = [
-            "Session handling guidance:",
-            "- Available env vars for auth/session:",
-            "  - SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN: JSON map {domain: cookieHeader}.",
-            "  - SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON: JSON map {domain: [cookie objects]}.",
-            "  - <DOMAIN>_COOKIES: JSON string {domain, cookieHeader, cookies}.",
-            "  - <DOMAIN>_COOKIES_JSON: JSON array of cookies for that domain.",
-            "  - SKILL_RUNNER_COOKIES_JSON: active-tab cookie array (legacy/compat).",
-            "- Use curl when a direct HTTP call is enough:",
-            "  - Read cookie header from SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN or <DOMAIN>_COOKIES.",
-            "  - Call: curl -H \"Cookie: <header>\" <url>.",
-            "- Use a script (Playwright/Python/Node) when multi-step login/stateful flows are needed:",
-            "  - Parse <DOMAIN>_COOKIES or <DOMAIN>_COOKIES_JSON and set cookies programmatically.",
-            "  - Reuse those cookies across steps instead of re-authenticating.",
-            "- Treat cookies/session as sensitive and avoid echoing full secrets in output.",
-        ]
-        if not session_allowed:
-            session_guidance.append("- Session info is not trusted/allowed for this request; continue without authenticated cookie replay.")
+        # Compact skill name list
+        skill_names = [s.get("name", "unknown") if isinstance(s, dict) else str(s) for s in skills]
 
-        sections = [
-            "You are running inside the skill launcher contract.",
-            "",
-            "Request metadata:",
-            _json_dumps({
-                "mode": request.get("mode"),
-                "requestName": request.get("requestName"),
-                "model": request.get("model"),
-                "source": {
-                    "type": source.get("type"),
-                    "url": source.get("url"),
-                    "title": source.get("title"),
-                }
-            }),
-            "",
-            "Selected skills:",
-            _json_dumps(skills),
-            "",
-            "Page content:",
-            _json_dumps({
-                "text": page_content.get("text", ""),
-                "headings": page_content.get("headings", []),
-                "meta": page_content.get("meta", {}),
-                "links": page_content.get("links", []),
-            }),
-            "",
-            "Active tab info:",
-            _json_dumps(active_tab_info),
-            "",
-            "Session info:",
-            _json_dumps(session_info),
-            "",
-            "\n".join(session_guidance),
-            "",
-        ]
+        # Derive origin from source URL
+        source_url = _normalize_text(source.get("url"))
+        source_title = _normalize_text(source.get("title"))
+        source_origin = ""
+        if source_url:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(source_url)
+                source_origin = f"{parsed.scheme}://{parsed.hostname}" if parsed.hostname else ""
+            except Exception:
+                pass
 
-        if agent_instructions:
-            sections.extend([
-                "Agent instructions:",
-                agent_instructions,
-                "",
-            ])
+        sections = []
 
-        if task_input:
-            sections.extend([
-                "Task input:",
-                task_input,
-                "",
-            ])
+        # Skill usage instruction (brief)
+        if skill_names:
+            sections.append(f"Use available skills: {', '.join(skill_names)}")
+            sections.append("Read the SKILL.md files for instructions. Run scripts from the skills directory.")
+            sections.append("")
 
-        if task_images:
-            sections.extend([
-                "Task images:",
-                _json_dumps(task_images),
-                "",
-            ])
+        # Active tab context
+        if source_url:
+            sections.append(f"Active tab: {source_title} ({source_url})" if source_title else f"Active tab: {source_url}")
+            if source_origin:
+                sections.append(f"Origin: {source_origin}")
 
-        sections.extend([
-            "User message:",
-            user_message or "(empty user message)",
-        ])
+        # Authenticated request guidance with concrete examples
+        if source_url:
+            target = source_origin or source_url
+            sections.append("")
+            sections.append("For authenticated HTTP requests, use env vars directly (never type out values):")
+            sections.append(f"  curl -b \"$SKILL_RUNNER_COOKIE_HEADER\" -H \"Accept: ${{ACCEPT}}\" {target}/api/endpoint")
+            sections.append("Request headers are in $SKILL_RUNNER_REQUEST_HEADERS_JSON (JSON object).")
+            sections.append("Scripts in skills/ handle cookies and headers from env vars automatically.")
+            sections.append("")
+
+        # Include page text if provided (this is the only bulk content in the prompt)
+        page_text = _normalize_text(page_content.get("text"))
+        if page_text:
+            if len(page_text) > 4000:
+                page_text = page_text[:4000] + "\n...(truncated)"
+            sections.extend(["Page content:", page_text, ""])
+
+        # The actual user task
+        if task_input and task_input != user_message:
+            sections.append(task_input)
+
+        sections.append(user_message or "(empty user message)")
+
         return "\n".join(sections)
 
     def _sync_skills_cached(self, skills_config: Dict, runner: str) -> Dict:
@@ -624,15 +696,25 @@ class SkillLauncher:
             return {"status": "skipped", "reason": "repository URL missing", "count": 0}
 
         try:
-            package_urls = self._discover_skill_urls(repository_url)
+            package_urls, shared_urls = self._discover_repo_urls(repository_url)
         except Exception as exc:
-            return {"status": "error", "error": f"Failed to discover .skill packages: {exc}", "count": 0}
+            return {"status": "error", "error": f"Failed to discover packages: {exc}", "count": 0}
 
         runner_dir = self._runner_skills_dir(runner)
         runner_dir.mkdir(parents=True, exist_ok=True)
 
+        # Extract shared library packages first (e.g. shared.zip)
+        shared_dir = self._runner_shared_dir(runner)
+        shared_warnings = []
+        for url in shared_urls:
+            try:
+                shared_bytes = self._http_get_bytes(url)
+                self._extract_shared_package(shared_bytes, shared_dir)
+            except Exception as exc:
+                shared_warnings.append(f"shared {url}: {exc}")
+
         extracted = []
-        warnings = []
+        warnings = list(shared_warnings)
         for url in package_urls:
             try:
                 package_bytes = self._http_get_bytes(url)
@@ -663,6 +745,8 @@ class SkillLauncher:
             "repositoryUrl": repository_url,
             "count": len(extracted),
             "packages": extracted,
+            "sharedDir": str(shared_dir) if shared_dir.exists() else None,
+            "sharedPackages": len(shared_urls),
             "warnings": warnings,
         }
         state_file = self._runner_state_file(runner)
@@ -673,6 +757,9 @@ class SkillLauncher:
 
     def _runner_skills_dir(self, runner: str) -> Path:
         return self._runner_root_dir(runner) / "skills"
+
+    def _runner_shared_dir(self, runner: str) -> Path:
+        return self._runner_root_dir(runner) / "shared"
 
     def _runner_root_dir(self, runner: str) -> Path:
         runner_key = _safe_name(runner).lower()
@@ -699,37 +786,123 @@ class SkillLauncher:
         }
         return [part.format(**variables) for part in template]
 
-    def _discover_skill_urls(self, repository_url: str) -> List[str]:
+    def _discover_repo_urls(self, repository_url: str) -> Tuple[List[str], List[str]]:
+        """Discover both .skill package URLs and shared .zip URLs from a repository listing.
+
+        Returns (skill_urls, shared_urls) tuple.
+        Shared packages are identified by:
+        - JSON listing: "shared" array or links containing "shared" in name
+        - HTML/text listing: links ending in .zip with "shared" in the name
+        """
         base_url = repository_url if repository_url.endswith("/") else repository_url + "/"
         response_bytes, content_type = self._http_get(base_url)
         text = response_bytes.decode("utf-8", errors="replace")
-        links = []
+        skill_links = []
+        shared_links = []
 
         if "application/json" in content_type:
             parsed = json.loads(text)
+            all_links = []
             if isinstance(parsed, list):
-                links = [item for item in parsed if isinstance(item, str)]
-            elif isinstance(parsed, dict) and isinstance(parsed.get("skills"), list):
-                links = [item for item in parsed["skills"] if isinstance(item, str)]
+                all_links = [item for item in parsed if isinstance(item, str)]
+            elif isinstance(parsed, dict):
+                if isinstance(parsed.get("skills"), list):
+                    all_links = [item for item in parsed["skills"] if isinstance(item, str)]
+                if isinstance(parsed.get("shared"), list):
+                    shared_links.extend(item for item in parsed["shared"] if isinstance(item, str))
+            for link in all_links:
+                lower = link.lower()
+                if lower.endswith(".skill") or ".skill?" in lower:
+                    skill_links.append(link)
+                elif lower.endswith(".zip") and "shared" in lower:
+                    shared_links.append(link)
         else:
-            links.extend(re.findall(r'href\s*=\s*["\']([^"\']+\.skill(?:\?[^"\']*)?)["\']', text, flags=re.IGNORECASE))
-            if not links:
-                links.extend(
+            # Discover .skill links
+            skill_links.extend(re.findall(r'href\s*=\s*["\']([^"\']+\.skill(?:\?[^"\']*)?)["\']', text, flags=re.IGNORECASE))
+            if not skill_links:
+                skill_links.extend(
                     line.strip()
                     for line in text.splitlines()
                     if line.strip().lower().endswith(".skill")
                 )
+            # Discover shared .zip links
+            zip_hrefs = re.findall(r'href\s*=\s*["\']([^"\']+\.zip(?:\?[^"\']*)?)["\']', text, flags=re.IGNORECASE)
+            for href in zip_hrefs:
+                if "shared" in href.lower():
+                    shared_links.append(href)
+            if not shared_links:
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped.lower().endswith(".zip") and "shared" in stripped.lower():
+                        shared_links.append(stripped)
 
-        resolved = []
+        # Resolve skill URLs
+        skill_resolved = []
         seen = set()
-        for link in links:
+        for link in skill_links:
             full = urljoin(base_url, link.strip())
-            if ".skill" not in full.lower():
-                continue
             if full not in seen:
                 seen.add(full)
-                resolved.append(full)
-        return resolved
+                skill_resolved.append(full)
+
+        # Resolve shared URLs
+        shared_resolved = []
+        shared_seen = set()
+        for link in shared_links:
+            full = urljoin(base_url, link.strip())
+            if full not in shared_seen:
+                shared_seen.add(full)
+                shared_resolved.append(full)
+
+        return skill_resolved, shared_resolved
+
+    def _discover_skill_urls(self, repository_url: str) -> List[str]:
+        """Legacy compatibility wrapper."""
+        skill_urls, _ = self._discover_repo_urls(repository_url)
+        return skill_urls
+
+    def _extract_shared_package(self, package_bytes: bytes, shared_dir: Path) -> None:
+        """Extract a shared library ZIP into the runner's shared/ directory.
+
+        The contents are merged into shared_dir (existing files are overwritten).
+        This supports the convention where skill scripts import from
+        AGENT_SHARED_PATH (e.g. ``from base_script import call_api``).
+        """
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(package_bytes), "r") as archive:
+            # Check for a single top-level directory wrapper (e.g. shared/)
+            top_dirs = set()
+            for info in archive.infolist():
+                parts = info.filename.split("/", 1)
+                if len(parts) > 1:
+                    top_dirs.add(parts[0])
+            single_wrapper = len(top_dirs) == 1
+
+            for member in archive.infolist():
+                filename = member.filename
+                # Strip single top-level wrapper directory if present
+                if single_wrapper:
+                    prefix = next(iter(top_dirs)) + "/"
+                    if filename.startswith(prefix):
+                        filename = filename[len(prefix):]
+                    elif filename.rstrip("/") == next(iter(top_dirs)):
+                        continue  # skip the wrapper dir itself
+
+                if not filename or filename.endswith("/"):
+                    target = shared_dir / filename
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+
+                target = shared_dir / filename
+                resolved = target.resolve()
+                if not str(resolved).startswith(str(shared_dir.resolve())):
+                    continue  # skip unsafe paths
+
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member, "r") as src, open(resolved, "wb") as dst:
+                    dst.write(src.read())
+
+        self._log("shared_package_extracted", {"sharedDir": str(shared_dir)})
 
     def _extract_skill_package(self, package_bytes: bytes, extract_dir: Path) -> Tuple[str, Path]:
         with zipfile.ZipFile(io.BytesIO(package_bytes), "r") as archive:
