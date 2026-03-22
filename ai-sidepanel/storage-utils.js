@@ -32,6 +32,7 @@
     nativeHostName: 'com.local.skillrunner.host',
     timeoutMs: 120000
   };
+  const DEFAULT_RUNNER_COOKIE_ENV_MAP = {};
 
   const DEFAULT_THEME = 'light';
 
@@ -163,6 +164,83 @@
     return normalized;
   }
 
+  function normalizeEnvVarName(value, fallback) {
+    const raw = typeof value === 'string' ? value.trim().toUpperCase() : '';
+    const cleaned = raw.replace(/[^A-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+/, '');
+    if (!cleaned) {
+      return fallback;
+    }
+    if (/^[0-9]/.test(cleaned)) {
+      return `COOKIES_${cleaned}`;
+    }
+    return cleaned;
+  }
+
+  function defaultCookieEnvName(domain) {
+    const source = String(domain || '').trim().toUpperCase();
+    const normalized = source
+      .replace(/^\*\./, '')
+      .replace(/^https?:\/\//, '')
+      .replace(/[:/].*$/, '')
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    const base = normalized || 'DOMAIN';
+    return normalizeEnvVarName(`${base}_COOKIES`, 'SKILL_RUNNER_COOKIES');
+  }
+
+  function parseCookieEnvMapText(rawText) {
+    if (typeof rawText !== 'string') {
+      return {};
+    }
+    const output = {};
+    rawText.split(/\r?\n/).forEach((line) => {
+      const text = line.trim();
+      if (!text || text.startsWith('#')) {
+        return;
+      }
+      const index = text.indexOf('=');
+      if (index <= 0) {
+        return;
+      }
+      const domain = text.slice(0, index).trim().toLowerCase();
+      const envName = text.slice(index + 1).trim();
+      if (!domain || !envName) {
+        return;
+      }
+      output[domain] = envName;
+    });
+    return output;
+  }
+
+  function normalizeRunnerCookieEnvMap(rawMap, trustedDomains) {
+    const trusted = Array.isArray(trustedDomains) ? trustedDomains : [];
+    const source = (rawMap && typeof rawMap === 'object' && !Array.isArray(rawMap))
+      ? rawMap
+      : parseCookieEnvMapText(rawMap);
+
+    const normalized = {};
+    trusted.forEach((domain) => {
+      const key = String(domain || '').trim().toLowerCase();
+      if (!key) {
+        return;
+      }
+      const configured = source[key] || source[domain];
+      normalized[key] = normalizeEnvVarName(configured, defaultCookieEnvName(key));
+    });
+
+    Object.keys(source || {}).forEach((domain) => {
+      const key = String(domain || '').trim().toLowerCase();
+      if (!key) {
+        return;
+      }
+      if (!normalized[key]) {
+        normalized[key] = normalizeEnvVarName(source[domain], defaultCookieEnvName(key));
+      }
+    });
+
+    return normalized;
+  }
+
   function normalizeSkillsConfig(rawConfig) {
     const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
     const defaults = global.SkillsManager && SkillsManager.DEFAULT_SKILLS_CONFIG
@@ -205,6 +283,7 @@
   }
 
   function sanitizeSettings(rawSettings) {
+    const trustedSessionDomains = normalizeTrustedDomains(rawSettings.trustedSessionDomains);
     const normalizedModels = normalizeModels(rawSettings.models, rawSettings.model);
     const defaultModelId = sanitizeText(rawSettings.defaultModelId, normalizedModels[0].id);
     const hasDefault = normalizedModels.some((entry) => entry.id === defaultModelId);
@@ -219,7 +298,8 @@
       skillsConfig: normalizeSkillsConfig(rawSettings.skillsConfig),
       runnerConfig: normalizeRunnerConfig(rawSettings.runnerConfig),
       theme: normalizeTheme(rawSettings.theme),
-      trustedSessionDomains: normalizeTrustedDomains(rawSettings.trustedSessionDomains)
+      trustedSessionDomains,
+      runnerCookieEnvMap: normalizeRunnerCookieEnvMap(rawSettings.runnerCookieEnvMap, trustedSessionDomains)
     };
   }
 
@@ -235,7 +315,8 @@
       'skillsConfig',
       'runnerConfig',
       'theme',
-      'trustedSessionDomains'
+      'trustedSessionDomains',
+      'runnerCookieEnvMap'
     ]);
 
     if (
@@ -247,7 +328,8 @@
       localSettings.skillsConfig ||
       localSettings.runnerConfig ||
       localSettings.theme ||
-      localSettings.trustedSessionDomains
+      localSettings.trustedSessionDomains ||
+      localSettings.runnerCookieEnvMap
     ) {
       const sanitized = sanitizeSettings(localSettings);
       await chrome.storage.local.set(sanitized);
@@ -277,7 +359,8 @@
       'skillsConfig',
       'runnerConfig',
       'theme',
-      'trustedSessionDomains'
+      'trustedSessionDomains',
+      'runnerCookieEnvMap'
     ]);
 
     const hasStructuredSettings = (
@@ -289,7 +372,8 @@
       existing.skillsConfig ||
       existing.runnerConfig ||
       existing.theme ||
-      existing.trustedSessionDomains
+      existing.trustedSessionDomains ||
+      existing.runnerCookieEnvMap
     );
     if (!hasStructuredSettings) {
       return migrateLegacySettings();
@@ -384,11 +468,14 @@
     DEFAULT_STORAGE_METRICS: clone(DEFAULT_STORAGE_METRICS),
     DEFAULT_SKILLS_CONFIG: clone(DEFAULT_SKILLS_CONFIG),
     DEFAULT_RUNNER_CONFIG: clone(DEFAULT_RUNNER_CONFIG),
+    DEFAULT_RUNNER_COOKIE_ENV_MAP: clone(DEFAULT_RUNNER_COOKIE_ENV_MAP),
     DEFAULT_THEME,
     loadSettings,
     saveSettings,
     sanitizeSettings,
     normalizeModels,
+    normalizeRunnerCookieEnvMap,
+    defaultCookieEnvName,
     getDefaultModel,
     resolveModel,
     createId,

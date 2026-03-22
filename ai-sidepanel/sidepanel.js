@@ -10,7 +10,13 @@ const includeTabContentToggle = document.getElementById('includeTabContentToggle
 const includeSessionInfoToggle = document.getElementById('includeSessionInfoToggle');
 const historyListEl = document.getElementById('historyList');
 const historyUsageEl = document.getElementById('historyUsage');
+const tasksListEl = document.getElementById('tasksList');
+const tasksUsageEl = document.getElementById('tasksUsage');
 const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
+const tasksViewBtn = document.getElementById('tasksViewBtn');
+const historyViewBtn = document.getElementById('historyViewBtn');
+const tasksPanel = document.getElementById('tasksPanel');
+const historyPanel = document.getElementById('historyPanel');
 
 const basicModeBtn = document.getElementById('basicModeBtn');
 const advancedModeBtn = document.getElementById('advancedModeBtn');
@@ -36,6 +42,11 @@ let currentSettings = null;
 let extensionMode = 'developer';
 let includeTabContent = false;
 let includeSessionInfo = true;
+let jobsPollHandle = null;
+let currentRunnerJobs = [];
+let activeBottomView = 'tasks';
+let activeJobByMode = { basic: null, advanced: null };
+const deliveredJobResults = new Set();
 
 document.addEventListener('DOMContentLoaded', initializeSidepanel);
 
@@ -43,7 +54,9 @@ async function initializeSidepanel() {
   runBtn.addEventListener('click', handleRun);
   settingsBtn.addEventListener('click', handleSettings);
   copyBtn.addEventListener('click', handleCopy);
-  refreshHistoryBtn.addEventListener('click', renderHistory);
+  refreshHistoryBtn.addEventListener('click', refreshActivityPanels);
+  tasksViewBtn.addEventListener('click', () => switchActivityView('tasks'));
+  historyViewBtn.addEventListener('click', () => switchActivityView('history'));
 
   basicModeBtn.addEventListener('click', () => switchMode('basic'));
   advancedModeBtn.addEventListener('click', () => switchMode('advanced'));
@@ -62,7 +75,9 @@ async function initializeSidepanel() {
   await loadContextPreferences();
   await loadMode();
   await loadApiSession();
-  await renderHistory();
+  switchActivityView('tasks');
+  await refreshActivityPanels();
+  jobsPollHandle = setInterval(refreshRunnerJobs, 1000);
 }
 
 function handleStorageChanges(changes, areaName) {
@@ -77,7 +92,7 @@ function handleStorageChanges(changes, areaName) {
     }
   }
 
-  if (changes.models || changes.defaultModelId || changes.apiUrl || changes.apiKey || changes.trustedSessionDomains) {
+  if (changes.models || changes.defaultModelId || changes.apiUrl || changes.apiKey || changes.trustedSessionDomains || changes.runnerCookieEnvMap) {
     StorageUtils.loadSettings().then((settings) => {
       currentSettings = settings;
       extensionMode = settings.extensionMode || 'developer';
@@ -85,6 +100,10 @@ function handleStorageChanges(changes, areaName) {
       applyExtensionMode(extensionMode);
       renderModelOptions(settings);
     });
+  }
+
+  if (changes.runnerJobsState) {
+    refreshRunnerJobs();
   }
 
   if (changes.theme) {
@@ -102,6 +121,15 @@ function handleStorageChanges(changes, areaName) {
   if (changes.storageMetrics) {
     updateHistoryUsage(changes.storageMetrics.newValue);
   }
+}
+
+function switchActivityView(view) {
+  activeBottomView = view === 'history' ? 'history' : 'tasks';
+  const showTasks = activeBottomView === 'tasks';
+  tasksPanel.style.display = showTasks ? 'block' : 'none';
+  historyPanel.style.display = showTasks ? 'none' : 'block';
+  tasksViewBtn.classList.toggle('active', showTasks);
+  historyViewBtn.classList.toggle('active', !showTasks);
 }
 
 async function loadMode() {
@@ -173,12 +201,15 @@ async function handleRun() {
     let requestPayload = parsed;
     let source = { type: 'sidepanel-advanced' };
     if (includeTabContent || includeSessionInfo) {
-      const tabData = await captureCurrentTab();
-      const trusted = isTrustedDomain(tabData.url, currentSettings && currentSettings.trustedSessionDomains);
-      const allowSession = includeSessionInfo && trusted;
+      const trustedDomains = (currentSettings && currentSettings.trustedSessionDomains) || [];
+      const tabData = await captureCurrentTab({ trustedDomains });
+      const trustedActive = isTrustedDomain(tabData.url, trustedDomains);
+      const allowSession = includeSessionInfo && trustedDomains.length > 0;
+      const includeStorageSnapshots = allowSession && trustedActive;
       requestPayload = attachActiveTabContextToRequest(parsed, tabData, {
         includePageContent: includeTabContent,
-        includeSession: allowSession
+        includeSession: allowSession,
+        includeStorageSnapshots
       });
       source = {
         type: 'sidepanel-advanced',
@@ -191,10 +222,12 @@ async function handleRun() {
           links: tabData.links || []
         } : {}),
         ...(allowSession ? {
-          cookies: tabData.cookies || [],
-          cookieHeader: tabData.cookieHeader || '',
-          sessionStorageSnapshot: tabData.sessionStorageSnapshot || {},
-          localStorageSnapshot: tabData.localStorageSnapshot || {}
+          cookies: trustedActive ? (tabData.cookies || []) : [],
+          cookieHeader: trustedActive ? (tabData.cookieHeader || '') : '',
+          cookiesByDomain: tabData.cookiesByDomain || {},
+          cookieHeadersByDomain: tabData.cookieHeadersByDomain || {},
+          sessionStorageSnapshot: includeStorageSnapshots ? (tabData.sessionStorageSnapshot || {}) : {},
+          localStorageSnapshot: includeStorageSnapshots ? (tabData.localStorageSnapshot || {}) : {}
         } : {}),
         sessionInfoAllowed: allowSession
       };
@@ -214,9 +247,15 @@ async function handleRun() {
       throw new Error(response.error);
     }
 
-    displayOutput(response.output);
-    showStatus(statusEl, `Completed ${response.output.response.length} task(s).`, 'success');
-    await renderHistory();
+    if (response.accepted && response.jobId) {
+      activeJobByMode.advanced = response.jobId;
+      showStatus(statusEl, `Queued runner job ${response.jobId}. Waiting for execution...`, 'loading');
+      await refreshRunnerJobs();
+    } else {
+      displayOutput(response.output);
+      showStatus(statusEl, `Completed ${response.output.response.length} task(s).`, 'success');
+      await renderHistory();
+    }
   } catch (error) {
     console.error('[Sidepanel] Advanced request failed:', error);
     showStatus(statusEl, `Error: ${error.message}`, 'error');
@@ -240,14 +279,16 @@ async function handleCapture() {
 
     if (includeTabContent || includeSessionInfo) {
       showStatus(basicStatus, 'Capturing current tab...', 'loading');
-      const tabData = await captureCurrentTab();
-      const trusted = isTrustedDomain(tabData.url, currentSettings && currentSettings.trustedSessionDomains);
-      const allowSession = includeSessionInfo && trusted;
-      const sessionStatus = includeSessionInfo && !trusted
-        ? 'Session info blocked (domain not trusted).'
-        : allowSession
-          ? 'Session info included for trusted domain.'
-          : 'Session info disabled.';
+      const trustedDomains = (currentSettings && currentSettings.trustedSessionDomains) || [];
+      const tabData = await captureCurrentTab({ trustedDomains });
+      const trustedActive = isTrustedDomain(tabData.url, trustedDomains);
+      const allowSession = includeSessionInfo && trustedDomains.length > 0;
+      const includeStorageSnapshots = allowSession && trustedActive;
+      const sessionStatus = !allowSession
+        ? 'Session info disabled.'
+        : includeStorageSnapshots
+          ? 'Trusted cookies + active-tab storage included.'
+          : 'Trusted-domain cookies included (active-tab storage skipped; tab domain not trusted).';
       request = {
         agent: 'You are a helpful AI assistant that analyzes web pages using the provided text and screenshots.',
         name: 'PAGE_ANALYZER',
@@ -258,7 +299,7 @@ async function handleCapture() {
             `Page Title: ${tabData.title}`,
             `Page URL: ${tabData.url}`,
             includeTabContent ? `Page Content: ${tabData.pageText || ''}` : 'Page Content: (not included)',
-            allowSession ? `Cookies: ${tabData.cookieHeader || '-'}` : `Cookies: (not included)`,
+            allowSession ? `Cookies: ${tabData.cookieHeader || '-'}` : 'Cookies: (not included)',
             `Session Info: ${sessionStatus}`
           ].join('\n'),
           supplements: [
@@ -269,9 +310,11 @@ async function handleCapture() {
               { type: 'json', label: 'Links', value: tabData.links }
             ] : []),
             ...(allowSession ? [
-              { type: 'json', label: 'Cookies', value: tabData.cookies || [] },
-              { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
-              { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+              { type: 'json', label: 'Cookies By Domain', value: tabData.cookieHeadersByDomain || {} },
+              ...(includeStorageSnapshots ? [
+                { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
+                { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+              ] : [])
             ] : [])
           ]
         }]
@@ -287,10 +330,12 @@ async function handleCapture() {
           links: tabData.links || []
         } : {}),
         ...(allowSession ? {
-          cookies: tabData.cookies || [],
-          cookieHeader: tabData.cookieHeader || '',
-          sessionStorageSnapshot: tabData.sessionStorageSnapshot || {},
-          localStorageSnapshot: tabData.localStorageSnapshot || {}
+          cookies: trustedActive ? (tabData.cookies || []) : [],
+          cookieHeader: trustedActive ? (tabData.cookieHeader || '') : '',
+          cookiesByDomain: tabData.cookiesByDomain || {},
+          cookieHeadersByDomain: tabData.cookieHeadersByDomain || {},
+          sessionStorageSnapshot: includeStorageSnapshots ? (tabData.sessionStorageSnapshot || {}) : {},
+          localStorageSnapshot: includeStorageSnapshots ? (tabData.localStorageSnapshot || {}) : {}
         } : {}),
         sessionInfoAllowed: allowSession
       };
@@ -324,9 +369,15 @@ async function handleCapture() {
       throw new Error(response.error);
     }
 
-    displayResponseCards(basicOutput, response.output.response, true);
-    showStatus(basicStatus, 'Analysis complete.', 'success');
-    await renderHistory();
+    if (response.accepted && response.jobId) {
+      activeJobByMode.basic = response.jobId;
+      showStatus(basicStatus, `Queued runner job ${response.jobId}. Waiting for execution...`, 'loading');
+      await refreshRunnerJobs();
+    } else {
+      displayResponseCards(basicOutput, response.output.response, true);
+      showStatus(basicStatus, 'Analysis complete.', 'success');
+      await renderHistory();
+    }
   } catch (error) {
     console.error('[Sidepanel] Capture failed:', error);
     showStatus(basicStatus, `Error: ${error.message}`, 'error');
@@ -367,8 +418,8 @@ function attachActiveTabContextToRequest(requestObject, tabData, options) {
 
   const includePageContent = !!(options && options.includePageContent);
   const includeSession = !!(options && options.includeSession);
-  const trusted = isTrustedDomain(tabData.url, currentSettings && currentSettings.trustedSessionDomains);
-  const allowSession = includeSession && trusted;
+  const includeStorageSnapshots = !!(options && options.includeStorageSnapshots);
+  const allowSession = includeSession;
   taskList.forEach((task) => {
     if (!task || typeof task !== 'object') {
       return;
@@ -388,10 +439,14 @@ function attachActiveTabContextToRequest(requestObject, tabData, options) {
     }
     if (allowSession) {
       task.supplements.push(
-        { type: 'json', label: 'Cookies', value: tabData.cookies || [] },
-        { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
-        { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+        { type: 'json', label: 'Cookies By Domain', value: tabData.cookieHeadersByDomain || {} }
       );
+      if (includeStorageSnapshots) {
+        task.supplements.push(
+          { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
+          { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+        );
+      }
     }
   });
 
@@ -475,6 +530,161 @@ async function handleCopy() {
 
 function handleSettings() {
   chrome.runtime.openOptionsPage();
+}
+
+async function refreshActivityPanels() {
+  await Promise.all([
+    renderHistory(),
+    refreshRunnerJobs()
+  ]);
+}
+
+async function refreshRunnerJobs() {
+  try {
+    const response = await sendRuntimeMessage({ command: 'get-runner-jobs' });
+    if (!response.success) {
+      return;
+    }
+    currentRunnerJobs = Array.isArray(response.jobs) ? response.jobs : [];
+    renderRunnerJobs(currentRunnerJobs);
+    syncTrackedJobStatuses();
+  } catch (error) {
+    console.warn('[Sidepanel] Failed to refresh runner jobs:', error);
+  }
+}
+
+function renderRunnerJobs(jobs) {
+  const active = jobs.filter((job) =>
+    job.status === 'queued' || job.status === 'running' || job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out'
+  );
+
+  tasksUsageEl.textContent = `${active.length} task(s) in queue/history window`;
+
+  if (active.length === 0) {
+    tasksListEl.innerHTML = '<div class="muted">No current tasks.</div>';
+    return;
+  }
+
+  tasksListEl.innerHTML = '';
+  active.forEach((job, index) => {
+    const item = document.createElement('div');
+    item.className = 'task-item';
+    const timerText = buildJobTimerText(job);
+    const details = (job.output && job.output.response) || job.responses || [];
+    item.innerHTML = `
+      <div class="task-header">
+        <div class="task-title">${escapeHtml(job.requestName || 'Runner Task')}</div>
+        <div class="task-meta">${escapeHtml(job.status)}${job.queuePosition ? ` · Queue ${job.queuePosition}` : ''}</div>
+        <div class="task-toggle">${(job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out') ? 'Expand' : timerText}</div>
+      </div>
+      <div class="task-content">
+        <div class="muted">Mode: ${escapeHtml(job.mode || '-')} · Runner: ${escapeHtml((job.runner && job.runner.type) || '-')} (${escapeHtml((job.runner && job.runner.mode) || '-')})</div>
+        <div class="muted">Created: ${job.createdAt ? new Date(job.createdAt).toLocaleString() : '-'}</div>
+        <div class="muted">Started: ${job.startedAt ? new Date(job.startedAt).toLocaleString() : '-'}</div>
+        <div class="muted">Finished: ${job.finishedAt ? new Date(job.finishedAt).toLocaleString() : '-'}</div>
+        <div class="muted">Progress: ${(job.progress && job.progress.completed) || 0}/${(job.progress && job.progress.total) || 0}</div>
+        ${job.error ? `<div class="muted" style="color:#c5221f;">${escapeHtml(job.error)}</div>` : ''}
+        <div class="section-title" style="margin-top: 12px;">Results</div>
+        <pre>${escapeHtml(JSON.stringify(details, null, 2))}</pre>
+      </div>
+    `;
+
+    const header = item.querySelector('.task-header');
+    const content = item.querySelector('.task-content');
+    const toggle = item.querySelector('.task-toggle');
+    header.addEventListener('click', () => {
+      const expandable = job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out';
+      if (!expandable) {
+        return;
+      }
+      const expanded = content.classList.toggle('expanded');
+      toggle.textContent = expanded ? 'Collapse' : 'Expand';
+    });
+
+    if (index === 0 && (job.status === 'completed' || job.status === 'failed' || job.status === 'timed_out')) {
+      content.classList.add('expanded');
+      toggle.textContent = 'Collapse';
+    }
+
+    tasksListEl.appendChild(item);
+  });
+}
+
+function buildJobTimerText(job) {
+  const now = Date.now();
+  const queuedAt = job.queuedAt ? new Date(job.queuedAt).getTime() : now;
+  const startedAt = job.startedAt ? new Date(job.startedAt).getTime() : null;
+  if (job.status === 'queued') {
+    return `Waiting ${formatDuration(now - queuedAt)}`;
+  }
+  if (job.status === 'running') {
+    const activeStartedAt = job.activeTaskStartedAt ? new Date(job.activeTaskStartedAt).getTime() : startedAt || now;
+    const elapsed = now - activeStartedAt;
+    const timeoutMs = job.activeTaskTimeoutMs || job.timeoutMs || 120000;
+    const remaining = Math.max(0, timeoutMs - elapsed);
+    return `Elapsed ${formatDuration(elapsed)} · Timeout in ${formatDuration(remaining)}`;
+  }
+  return job.finishedAt ? `Done in ${formatDuration(new Date(job.finishedAt).getTime() - (startedAt || queuedAt))}` : 'Done';
+}
+
+function syncTrackedJobStatuses() {
+  ['basic', 'advanced'].forEach((mode) => {
+    const jobId = activeJobByMode[mode];
+    if (!jobId) {
+      return;
+    }
+
+    const job = currentRunnerJobs.find((entry) => entry.id === jobId);
+    if (!job) {
+      return;
+    }
+
+    const isBasic = mode === 'basic';
+    const statusNode = isBasic ? basicStatus : statusEl;
+    if (job.status === 'queued') {
+      const queueSuffix = job.queuePosition ? ` (queue ${job.queuePosition})` : '';
+      showStatus(statusNode, `Queued${queueSuffix}. Waiting ${buildJobTimerText(job)}.`, 'loading');
+      return;
+    }
+
+    if (job.status === 'running') {
+      const progress = job.progress || {};
+      showStatus(
+        statusNode,
+        `Running ${progress.completed || 0}/${progress.total || 0}. ${buildJobTimerText(job)}`,
+        'loading'
+      );
+      return;
+    }
+
+    if (deliveredJobResults.has(job.id)) {
+      return;
+    }
+
+    deliveredJobResults.add(job.id);
+    const output = job.output || { response: job.responses || [] };
+    if (isBasic) {
+      displayResponseCards(basicOutput, output.response || [], true);
+    } else {
+      displayOutput(output);
+    }
+
+    if (job.status === 'completed') {
+      showStatus(statusNode, `Runner job completed (${(output.response || []).length} task result(s)).`, 'success');
+    } else if (job.status === 'timed_out') {
+      showStatus(statusNode, `Runner job timed out.`, 'error');
+    } else {
+      showStatus(statusNode, `Runner job finished with errors.`, 'error');
+    }
+    renderHistory();
+  });
+}
+
+function formatDuration(ms) {
+  const totalSec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${String(sec).padStart(2, '0')}`;
 }
 
 async function renderHistory() {
@@ -594,9 +804,12 @@ function sendRuntimeMessage(payload) {
   });
 }
 
-function captureCurrentTab() {
+function captureCurrentTab(options) {
+  const trustedDomains = options && Array.isArray(options.trustedDomains)
+    ? options.trustedDomains
+    : [];
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ command: 'capture-tab' }, (response) => {
+    chrome.runtime.sendMessage({ command: 'capture-tab', trustedDomains }, (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
         return;

@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -31,9 +32,33 @@ def _safe_name(value: str) -> str:
     return cleaned or "skill"
 
 
+def _normalize_cookie_domain(value: object) -> str:
+    domain = _normalize_text(value).lower()
+    domain = re.sub(r"^https?://", "", domain)
+    domain = domain.replace("*.", "")
+    domain = domain.split("/", 1)[0]
+    return domain.split(":", 1)[0]
+
+
+def _default_cookie_env_name(domain: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", domain.upper()).strip("_")
+    base = normalized or "DOMAIN"
+    return f"{base}_COOKIES"
+
+
+def _normalize_env_name(value: object, fallback: str) -> str:
+    name = _normalize_text(value).upper()
+    name = re.sub(r"[^A-Z0-9_]", "_", name)
+    name = re.sub(r"_+", "_", name).strip("_")
+    if not name:
+        name = fallback
+    if re.match(r"^[0-9]", name):
+        name = f"COOKIES_{name}"
+    return name
+
+
 def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
-
 
 class SkillLauncher:
     def __init__(
@@ -45,6 +70,9 @@ class SkillLauncher:
     ):
         self.launcher_root = launcher_root.resolve()
         self.launcher_root.mkdir(parents=True, exist_ok=True)
+        self.tasks_root = self.launcher_root / "task-runs"
+        self.tasks_root.mkdir(parents=True, exist_ok=True)
+
         self.runner_commands = dict(DEFAULT_RUNNER_COMMANDS)
         self.verbose = bool(verbose)
         self.log_file = log_file.resolve() if log_file else (self.launcher_root / "skill-launcher.log")
@@ -52,16 +80,27 @@ class SkillLauncher:
             for key, cmd in runner_commands.items():
                 if isinstance(cmd, list) and all(isinstance(part, str) for part in cmd):
                     self.runner_commands[key] = cmd
+
+        self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._tasks: Dict[str, Dict] = {}
+        self._task_order: List[str] = []
+        self._queue: List[str] = []
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="skill-launcher-worker")
+        self._worker.start()
+
         if self.verbose:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             self._log("launcher_initialized", {
                 "launcherRoot": str(self.launcher_root),
                 "logFile": str(self.log_file),
+                "tasksRoot": str(self.tasks_root),
             })
 
     def handle_payload(self, payload: Dict) -> Dict:
         self._log("incoming_payload", payload)
         action = _normalize_text(payload.get("action"))
+
         if action == "update-skills":
             runner = _normalize_text(payload.get("runner")) or "claude"
             skills_config = payload.get("skillsConfig") or {}
@@ -69,11 +108,126 @@ class SkillLauncher:
             self._log("update_skills_result", summary)
             return {"success": True, "updated": summary}
 
-        result = self.run_skill_runner(payload)
-        self._log("run_skill_runner_result", result)
-        return result
+        if action == "get-task-status":
+            task_id = _normalize_text(payload.get("taskId"))
+            task = self.get_task(task_id, include_output=bool(payload.get("includeOutput")))
+            if not task:
+                return {"success": False, "error": "Task not found"}
+            return {"success": True, "task": task}
 
-    def run_skill_runner(self, payload: Dict) -> Dict:
+        if action == "list-tasks":
+            limit = int(payload.get("limit") or 50)
+            return {"success": True, "tasks": self.list_tasks(limit=limit)}
+
+        if action == "cancel-task":
+            task_id = _normalize_text(payload.get("taskId"))
+            cancelled = self.cancel_task(task_id)
+            if not cancelled:
+                return {"success": False, "error": "Task cannot be cancelled"}
+            return {"success": True, "task": cancelled}
+
+        return self.enqueue_runner_task(payload)
+
+    def enqueue_runner_task(self, payload: Dict) -> Dict:
+        task_id = f"task-{int(time.time() * 1000)}-{os.urandom(3).hex()}"
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        task = {
+            "id": task_id,
+            "status": "queued",
+            "createdAt": now,
+            "startedAt": None,
+            "finishedAt": None,
+            "error": None,
+            "payload": payload or {},
+            "result": None,
+            "resultFile": None,
+            "taskDir": str(self.tasks_root / task_id),
+        }
+
+        with self._condition:
+            self._tasks[task_id] = task
+            self._task_order.append(task_id)
+            self._queue.append(task_id)
+            self._condition.notify_all()
+
+        self._log("task_enqueued", {"taskId": task_id})
+        return {
+            "success": True,
+            "accepted": True,
+            "task": self._public_task(task, include_output=False),
+        }
+
+    def get_task(self, task_id: str, include_output: bool = False) -> Optional[Dict]:
+        if not task_id:
+            return None
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+            snapshot = dict(task)
+        return self._public_task(snapshot, include_output=include_output)
+
+    def list_tasks(self, limit: int = 50) -> List[Dict]:
+        with self._lock:
+            ids = self._task_order[-max(1, limit):]
+            tasks = [dict(self._tasks[task_id]) for task_id in reversed(ids)]
+        return [self._public_task(task, include_output=False) for task in tasks]
+
+    def cancel_task(self, task_id: str) -> Optional[Dict]:
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if not task or task.get("status") != "queued":
+                return None
+            task["status"] = "failed"
+            task["error"] = "Cancelled by user"
+            task["finishedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            if task_id in self._queue:
+                self._queue.remove(task_id)
+            self._condition.notify_all()
+            snapshot = dict(task)
+        self._log("task_cancelled", {"taskId": task_id})
+        return self._public_task(snapshot, include_output=False)
+
+    def _worker_loop(self):
+        while True:
+            with self._condition:
+                while not self._queue:
+                    self._condition.wait()
+                task_id = self._queue.pop(0)
+                task = self._tasks.get(task_id)
+                if not task or task.get("status") != "queued":
+                    continue
+                task["status"] = "running"
+                task["startedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                payload = dict(task.get("payload") or {})
+
+            try:
+                result = self._run_payload(task_id, payload)
+                status = result.get("status") or "completed"
+                error = result.get("error")
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+                result = {"success": False, "error": str(exc), "status": status}
+
+            with self._condition:
+                task = self._tasks.get(task_id)
+                if not task:
+                    continue
+                task["status"] = status
+                task["error"] = error
+                task["finishedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                task["result"] = result
+                task["resultFile"] = result.get("resultFile")
+                self._condition.notify_all()
+
+            self._log("task_finished", {
+                "taskId": task_id,
+                "status": status,
+                "error": error,
+            })
+
+    def _run_payload(self, task_id: str, payload: Dict) -> Dict:
         runner = _normalize_text(payload.get("runner")) or "claude"
         prompt_arg = _normalize_text(payload.get("promptArg")) or "--prompt"
         prompt = _normalize_text(payload.get("prompt"))
@@ -86,7 +240,15 @@ class SkillLauncher:
             prompt = self._build_prompt_from_runner_input(runner_input)
 
         if not prompt:
-            return {"success": False, "error": "Missing prompt"}
+            return {"success": False, "status": "failed", "error": "Missing prompt"}
+
+        task_dir = self.tasks_root / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        request_file = task_dir / "request.json"
+        stdout_file = task_dir / "stdout.txt"
+        stderr_file = task_dir / "stderr.txt"
+        result_file = task_dir / "result.json"
+        request_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
         sync_summary = self.sync_skills(skills_config, runner)
         command = self._build_command(runner, prompt_arg, prompt)
@@ -107,6 +269,8 @@ class SkillLauncher:
         env["SKILL_RUNNER_COOKIE_HEADER"] = cookie_header
         env["SKILL_RUNNER_COOKIES_JSON"] = _json_dumps(cookies)
         env["SKILL_RUNNER_INPUT"] = _json_dumps(runner_input or {})
+        self._export_domain_cookie_envs(env, session_info)
+
         log_env = {
             key: env.get(key, "")
             for key in (
@@ -117,81 +281,170 @@ class SkillLauncher:
                 "SKILL_RUNNER_SESSION_INFO",
                 "SKILL_RUNNER_COOKIE_HEADER",
                 "SKILL_RUNNER_COOKIES_JSON",
+                "SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN",
             )
         }
         self._log("runner_invocation", {
+            "taskId": task_id,
             "runner": runner,
             "promptArg": prompt_arg,
             "command": command,
             "timeoutMs": timeout_ms,
             "env": log_env,
+            "stdoutFile": str(stdout_file),
+            "stderrFile": str(stderr_file),
         })
 
         started = time.time()
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                env=env,
-                cwd=str(self.launcher_root),
-                timeout=max(5, timeout_ms / 1000.0),
-            )
+            with stdout_file.open("w", encoding="utf-8") as stdout_handle, stderr_file.open("w", encoding="utf-8") as stderr_handle:
+                result = subprocess.run(
+                    command,
+                    stdout=stdout_handle,
+                    stderr=stderr_handle,
+                    text=True,
+                    env=env,
+                    cwd=str(self.launcher_root),
+                    timeout=max(5, timeout_ms / 1000.0),
+                )
+            duration_ms = int((time.time() - started) * 1000)
+            stdout = stdout_file.read_text(encoding="utf-8", errors="replace").strip()
+            stderr = stderr_file.read_text(encoding="utf-8", errors="replace").strip()
+            if result.returncode != 0:
+                payload = {
+                    "success": False,
+                    "status": "failed",
+                    "error": f"Runner exited with code {result.returncode}",
+                    "stderr": stderr,
+                    "stdout": stdout,
+                    "command": command,
+                    "sync": sync_summary,
+                    "durationMs": duration_ms,
+                    "stdoutFile": str(stdout_file),
+                    "stderrFile": str(stderr_file),
+                    "outputFile": str(stdout_file),
+                    "resultFile": str(result_file),
+                }
+                result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                self._log("runner_exit_nonzero", payload)
+                return payload
+
+            success_payload = {
+                "success": True,
+                "status": "completed",
+                "output": stdout or stderr,
+                "command": command,
+                "sync": sync_summary,
+                "durationMs": duration_ms,
+                "stdoutFile": str(stdout_file),
+                "stderrFile": str(stderr_file),
+                "outputFile": str(stdout_file if stdout else stderr_file),
+                "resultFile": str(result_file),
+            }
+            result_file.write_text(json.dumps(success_payload, indent=2), encoding="utf-8")
+            self._log("runner_exit_success", success_payload)
+            return success_payload
         except FileNotFoundError:
-            self._log("runner_error", {"error": "command not found", "command": command})
-            return {
+            payload = {
                 "success": False,
+                "status": "failed",
                 "error": f"Runner command not found: {command[0]}",
                 "command": command,
                 "sync": sync_summary,
+                "stdoutFile": str(stdout_file),
+                "stderrFile": str(stderr_file),
+                "outputFile": str(stdout_file),
+                "resultFile": str(result_file),
             }
+            result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._log("runner_error", payload)
+            return payload
         except subprocess.TimeoutExpired:
-            self._log("runner_error", {"error": "timeout", "timeoutMs": timeout_ms, "command": command})
-            return {
+            duration_ms = int((time.time() - started) * 1000)
+            payload = {
                 "success": False,
+                "status": "timed_out",
                 "error": f"Runner timed out after {timeout_ms} ms",
                 "command": command,
                 "sync": sync_summary,
+                "durationMs": duration_ms,
+                "stdoutFile": str(stdout_file),
+                "stderrFile": str(stderr_file),
+                "outputFile": str(stdout_file),
+                "resultFile": str(result_file),
             }
+            result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._log("runner_error", payload)
+            return payload
         except Exception as exc:
-            self._log("runner_error", {"error": str(exc), "command": command})
-            return {
+            payload = {
                 "success": False,
+                "status": "failed",
                 "error": f"Runner execution failed: {exc}",
                 "command": command,
                 "sync": sync_summary,
+                "stdoutFile": str(stdout_file),
+                "stderrFile": str(stderr_file),
+                "outputFile": str(stdout_file),
+                "resultFile": str(result_file),
             }
+            result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._log("runner_error", payload)
+            return payload
 
-        duration_ms = int((time.time() - started) * 1000)
-        stdout = (result.stdout or "").strip()
-        stderr = (result.stderr or "").strip()
-
-        if result.returncode != 0:
-            self._log("runner_exit_nonzero", {
-                "returncode": result.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "durationMs": duration_ms,
-            })
-            return {
-                "success": False,
-                "error": f"Runner exited with code {result.returncode}",
-                "stderr": stderr,
-                "stdout": stdout,
-                "command": command,
-                "sync": sync_summary,
-                "durationMs": duration_ms,
-            }
-
-        success_payload = {
-            "success": True,
-            "output": stdout or stderr,
-            "command": command,
-            "sync": sync_summary,
-            "durationMs": duration_ms,
+    def _public_task(self, task: Dict, include_output: bool = False) -> Dict:
+        payload = {
+            "id": task.get("id"),
+            "status": task.get("status"),
+            "createdAt": task.get("createdAt"),
+            "startedAt": task.get("startedAt"),
+            "finishedAt": task.get("finishedAt"),
+            "error": task.get("error"),
+            "resultFile": task.get("resultFile"),
+            "taskDir": task.get("taskDir"),
         }
-        self._log("runner_exit_success", success_payload)
-        return success_payload
+        if include_output:
+            payload["result"] = task.get("result")
+        return payload
+
+    def _export_domain_cookie_envs(self, env: Dict[str, str], session_info: Dict):
+        headers_by_domain = session_info.get("cookieHeadersByDomain")
+        if not isinstance(headers_by_domain, dict):
+            headers_by_domain = {}
+        cookies_by_domain = session_info.get("cookiesByDomain")
+        if not isinstance(cookies_by_domain, dict):
+            cookies_by_domain = {}
+        cookie_env_map = session_info.get("cookieEnvMap")
+        if not isinstance(cookie_env_map, dict):
+            cookie_env_map = {}
+
+        normalized_env_map = {
+            _normalize_cookie_domain(key): _normalize_env_name(value, _default_cookie_env_name(_normalize_cookie_domain(key)))
+            for key, value in cookie_env_map.items()
+            if _normalize_cookie_domain(key)
+        }
+
+        normalized_headers = {}
+        normalized_cookies = {}
+        for domain, value in headers_by_domain.items():
+            key = _normalize_cookie_domain(domain)
+            if not key:
+                continue
+            normalized_headers[key] = _normalize_text(value)
+        for domain, value in cookies_by_domain.items():
+            key = _normalize_cookie_domain(domain)
+            if not key:
+                continue
+            normalized_cookies[key] = value if isinstance(value, list) else []
+
+        for domain, header in normalized_headers.items():
+            fallback = _default_cookie_env_name(domain)
+            env_name = normalized_env_map.get(domain) or _normalize_env_name(None, fallback)
+            env[env_name] = header
+            env[f"{env_name}_JSON"] = _json_dumps(normalized_cookies.get(domain, []))
+
+        env["SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN"] = _json_dumps(normalized_headers)
+        env["SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON"] = _json_dumps(normalized_cookies)
 
     def _build_session_info(self, runner_input: Dict, context: Dict) -> Dict:
         session_info = {}
@@ -208,15 +461,24 @@ class SkillLauncher:
             session_info = {
                 "cookies": source.get("cookies", []),
                 "cookieHeader": source.get("cookieHeader", ""),
+                "cookiesByDomain": source.get("cookiesByDomain", {}),
+                "cookieHeadersByDomain": source.get("cookieHeadersByDomain", {}),
                 "sessionStorageSnapshot": source.get("sessionStorageSnapshot", {}),
                 "localStorageSnapshot": source.get("localStorageSnapshot", {}),
                 "sessionInfoAllowed": source.get("sessionInfoAllowed", False),
+                "cookieEnvMap": context.get("runnerCookieEnvMap", {}),
             }
 
         session_info["url"] = session_info.get("url") or source.get("url")
         session_info["title"] = session_info.get("title") or source.get("title")
         if not isinstance(session_info.get("cookies"), list):
             session_info["cookies"] = []
+        if not isinstance(session_info.get("cookiesByDomain"), dict):
+            session_info["cookiesByDomain"] = {}
+        if not isinstance(session_info.get("cookieHeadersByDomain"), dict):
+            session_info["cookieHeadersByDomain"] = {}
+        if not isinstance(session_info.get("cookieEnvMap"), dict):
+            session_info["cookieEnvMap"] = context.get("runnerCookieEnvMap", {}) if isinstance(context, dict) else {}
         if not isinstance(session_info.get("sessionStorageSnapshot"), dict):
             session_info["sessionStorageSnapshot"] = {}
         if not isinstance(session_info.get("localStorageSnapshot"), dict):
@@ -247,14 +509,15 @@ class SkillLauncher:
         session_guidance = [
             "Session handling guidance:",
             "- If authenticated access is required, first check SKILL_RUNNER_COOKIE_HEADER.",
-            "- You can use curl with the cookie header: curl -H \"Cookie: <value from SKILL_RUNNER_COOKIE_HEADER>\" <url>.",
-            "- For Playwright/browser automation, parse SKILL_RUNNER_SESSION_INFO JSON and reuse cookies from sessionInfo.cookies.",
+            "- For domain-specific cookies, check SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN and mapped *_COOKIES env vars.",
+            "- You can use curl with a cookie header value from env vars.",
+            "- For Playwright/browser automation, parse SKILL_RUNNER_SESSION_INFO JSON and reuse cookies.",
             "- Treat cookies/session as sensitive and avoid echoing full secrets in output.",
         ]
         if not session_allowed:
             session_guidance.append("- Session info is not trusted/allowed for this request; continue without authenticated cookie replay.")
         elif not cookie_header:
-            session_guidance.append("- Session forwarding is allowed, but cookie header is currently empty.")
+            session_guidance.append("- Session forwarding is allowed, but active-tab cookie header is empty.")
 
         sections = [
             "You are running inside the skill launcher contract.",

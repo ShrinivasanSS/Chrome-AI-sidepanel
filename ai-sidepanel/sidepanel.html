@@ -185,7 +185,8 @@
     }
 
     .result-item,
-    .history-item {
+    .history-item,
+    .task-item {
       border: 1px solid var(--border);
       border-radius: 10px;
       overflow: hidden;
@@ -194,7 +195,8 @@
     }
 
     .result-header,
-    .history-header {
+    .history-header,
+    .task-header {
       display: flex;
       align-items: center;
       gap: 8px;
@@ -204,20 +206,24 @@
     }
 
     .result-title,
-    .history-title {
+    .history-title,
+    .task-title {
       flex: 1;
       font-weight: 600;
     }
 
     .result-toggle,
     .history-toggle,
-    .history-meta {
+    .history-meta,
+    .task-toggle,
+    .task-meta {
       color: #5f6368;
       font-size: 12px;
     }
 
     .result-content,
-    .history-content {
+    .history-content,
+    .task-content {
       display: none;
       padding: 14px;
       border-top: 1px solid var(--border);
@@ -249,6 +255,15 @@
     .history-content pre {
       min-height: 80px;
       margin-top: 8px;
+    }
+
+    .view-toggle {
+      display: flex;
+      gap: 8px;
+    }
+
+    .view-toggle .mode-btn {
+      padding: 8px 12px;
     }
 
     .muted {
@@ -343,13 +358,21 @@
 
   <div class="section-card">
     <div class="toolbar">
-      <div class="section-title" style="margin: 0;">Local History</div>
-      <div class="toolbar-group">
-        <span id="historyUsage" class="muted"></span>
-        <button id="refreshHistoryBtn" class="ghost">Refresh History</button>
+      <div class="section-title" style="margin: 0;">Tasks & History</div>
+      <div class="toolbar-group view-toggle">
+        <button id="tasksViewBtn" class="mode-btn active">Current Tasks</button>
+        <button id="historyViewBtn" class="mode-btn">History</button>
+        <button id="refreshHistoryBtn" class="ghost">Refresh</button>
       </div>
     </div>
-    <div id="historyList" class="muted">No conversations stored yet.</div>
+    <div id="tasksPanel">
+      <div class="muted" id="tasksUsage"></div>
+      <div id="tasksList" class="muted">No current tasks.</div>
+    </div>
+    <div id="historyPanel" style="display:none;">
+      <div class="muted" id="historyUsage"></div>
+      <div id="historyList" class="muted">No conversations stored yet.</div>
+    </div>
   </div>
 
   <script src="markdown-renderer.js"></script>

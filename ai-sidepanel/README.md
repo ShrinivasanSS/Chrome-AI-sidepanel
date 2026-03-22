@@ -11,6 +11,9 @@ Chrome side panel extension for sending structured and multimodal requests to an
 - Sidepanel input toggle for Basic/Advanced:
   - `Include Active Tab Content` (default: off)
   - `Include Cookies/Session` (default: on, trusted domains only)
+- Sidepanel activity area has toggleable views:
+  - `Current Tasks` (skill-runner queue + timers + expandable results)
+  - `History` (stored conversation history)
 - Multiformat request ingestion:
   - Legacy JSON request format
   - Base64/data-URL image payloads
@@ -35,6 +38,7 @@ Open the extension options page and configure:
 - `Theme Mode` (`Light` or `Dark`)
 - `Extension Mode` (`Developer` or `User`)
 - `Trusted Session Domains` (whitelist for forwarding cookies/session storage to runner)
+- `Runner Cookie Env Mapping` (`domain=ENV_VAR`, auto-default generated when omitted)
 - `API Base URL`
 - `API Key`
 - One or more model entries
@@ -188,11 +192,15 @@ During request processing, relevant/selected skills are appended to the effectiv
 For sidepanel Basic and Advanced modes:
 - If `Include Active Tab Content` is enabled, the request is enriched with current tab text/screenshot/metadata.
 - If disabled (default), only the typed prompt/request payload is sent.
-- If `Include Cookies/Session` is enabled, cookies + local/session storage snapshots are forwarded only when active tab domain matches trusted-domain whitelist from settings.
+- If `Include Cookies/Session` is enabled, cookies are collected for all trusted domains and sent as per-domain payload.
+- Active-tab local/session storage snapshots are only forwarded when the active tab itself is trusted.
 
 ## Skill runner flow
 
 - If `Target = Skill Runner`, the extension bypasses API chat-completions calls.
+- Skill-runner requests are queued in extension storage and return immediately with `jobId`.
+- Queue states: `queued`, `running`, `completed`, `failed`, `timed_out`.
+- Sidepanel polls queue status and shows wait/timeout timers in `Current Tasks`.
 - In User mode, Basic prompt flow sends structured JSON context to runner host:
   - `runnerInput.userMessage` + `runnerInput.normalizedTaskText`
   - `runnerInput.sessionInfo` (cookies + storage snapshots)
@@ -211,6 +219,8 @@ For sidepanel Basic and Advanced modes:
   - `SKILL_RUNNER_SESSION_INFO` (cookies + storage snapshot JSON for trusted domains)
   - `SKILL_RUNNER_COOKIE_HEADER` (raw cookie header)
   - `SKILL_RUNNER_COOKIES_JSON` (cookie list JSON)
+  - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN` (trusted-domain cookie headers map)
+  - Domain vars like `LOCALHOST_COOKIES` (from settings map/auto defaults)
 - Local runner mode:
   - uses `chrome.runtime.sendNativeMessage(...)`
   - requires an installed Native Messaging host that launches the actual CLI binary

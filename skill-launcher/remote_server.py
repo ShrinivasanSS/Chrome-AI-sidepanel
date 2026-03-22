@@ -2,6 +2,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import parse_qs, urlparse
 
 from launcher_core import SkillLauncher
 
@@ -26,8 +27,28 @@ class SkillLauncherHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):  # noqa: N802
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+
+        if path == "/health":
             self._write_json({"status": "ok"})
+            return
+        if path == "/tasks":
+            limit = int((query.get("limit") or ["50"])[0] or 50)
+            result = self.launcher.handle_payload({"action": "list-tasks", "limit": limit})
+            self._write_json(result, status=200 if result.get("success", False) else 500)
+            return
+        if path.startswith("/tasks/"):
+            task_id = path.split("/tasks/", 1)[1].strip()
+            include_output = (query.get("includeOutput") or ["0"])[0] in ("1", "true", "yes")
+            result = self.launcher.handle_payload({
+                "action": "get-task-status",
+                "taskId": task_id,
+                "includeOutput": include_output
+            })
+            status = 200 if result.get("success", False) else 404
+            self._write_json(result, status=status)
             return
         self._write_json({"error": "Not found"}, status=404)
 

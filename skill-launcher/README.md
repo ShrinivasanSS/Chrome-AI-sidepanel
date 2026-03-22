@@ -10,6 +10,7 @@ It supports two interfaces:
 ## Features
 
 - Receives runner payload from extension (`runner`, `promptArg`, `runnerInput`, `timeoutMs`, `context`, `skillsConfig`)
+- Queues runner tasks (FIFO) and exposes task-status APIs for polling
 - Syncs `.skill` packages from configured repository URL before each run
 - Extracts packages into local per-runner folders under `skill-launcher`:
   - `./.claude/skills`
@@ -21,7 +22,7 @@ It supports two interfaces:
   - `./.cursor/skills/<skillname>/SKILL.md`
 - Executes selected CLI runner (`claude`, `copilot`, or `cursor`) with `--prompt`-style argument
 - Executes runner commands with working directory set to `skill-launcher` root
-- Returns command output back to extension
+- Persists per-task artifacts under `task-runs/<task-id>/` (`request.json`, `stdout.txt`, `stderr.txt`, `result.json`)
 - Builds final runner prompt text from structured `runnerInput` JSON contract
 - Adds built-in runner guidance for authenticated `curl`/Playwright flows using env-provided cookies/session
 - Sets environment variables for runner process:
@@ -29,6 +30,8 @@ It supports two interfaces:
   - `SKILL_RUNNER_SESSION_INFO` (trusted-domain cookies/session snapshot payload)
   - `SKILL_RUNNER_COOKIE_HEADER`
   - `SKILL_RUNNER_COOKIES_JSON`
+  - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN`
+  - domain mapped vars (for example `LOCALHOST_COOKIES`, plus `*_JSON`)
   - `SKILL_RUNNER_INPUT`
 
 ## Run (Remote Mode)
@@ -47,6 +50,7 @@ curl http://127.0.0.1:7070/health
 Run endpoint:
 
 - `POST /run`
+- Returns `accepted + task.id` (queued). Use task-status endpoints to fetch result.
 - JSON body example:
 
 ```json
@@ -86,6 +90,11 @@ Update skills only:
 - `POST /update-skills`
 - body can include `runner` and `skillsConfig`
 
+Task status endpoints:
+
+- `GET /tasks?limit=50`
+- `GET /tasks/<taskId>?includeOutput=1`
+
 ## Run (Native Messaging Mode)
 
 ```powershell
@@ -94,6 +103,11 @@ python app.py --mode native
 ```
 
 For Chrome integration, register this script (or packaged executable) as a Native Messaging host and set extension `Native Host Name` to that host id.
+
+Native messaging task actions now include:
+- `run-skill-runner` (enqueue task)
+- `get-task-status` (`taskId`, optional `includeOutput`)
+- `list-tasks`
 
 ## Verbose Logging
 

@@ -61,3 +61,12 @@ Use this section for reducing repeated searches.
 - Skill-runner contract now supports structured `runnerInput` from extension (`userMessage`, `sessionInfo`, `skills`, `pageContent`, `request/source metadata`) so extension no longer needs to flatten all context into one prompt string.
 - Prompt construction for CLI runners is now centralized in `skill-launcher` (`launcher_core.py`). This makes remote/native behavior consistent and keeps per-runner guidance in one place.
 - Launcher now exports cookie/session helpers beyond `SKILL_RUNNER_SESSION_INFO`: `SKILL_RUNNER_COOKIE_HEADER` and `SKILL_RUNNER_COOKIES_JSON`. This improves scriptability for authenticated `curl` and browser automation flows.
+
+## March 22 2026
+
+- Long-running skill-runner requests over one-shot `chrome.runtime.sendMessage` can still fail with channel-closed errors even when listeners return `true`. Queueing requests in extension storage and immediately returning `accepted + jobId` removes that failure mode in sidepanel flows.
+- A simple persisted queue (`chrome.storage.local`) with statuses `queued/running/completed/failed/timed_out` is enough to drive sidepanel task UX and survive sidepanel reopen.
+- Trusted-domain cookie forwarding is easier to consume in runners when sent as `cookieHeadersByDomain` plus a domain->env map (`runnerCookieEnvMap`) rather than a single active-tab cookie header.
+- Capturing cookies for all trusted domains should be done in service worker (`chrome.cookies.getAll({ domain })`), not in content scripts.
+- Launcher task execution is more debuggable when each run writes `request.json`, `stdout.txt`, `stderr.txt`, and `result.json` under a per-task directory and task APIs return those file paths.
+- For domain cookie envs, sanitize env names to uppercase `[A-Z0-9_]` and auto-generate defaults like `<DOMAIN>_COOKIES` when explicit mapping is missing.

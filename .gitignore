@@ -7,3 +7,4 @@ skill-launcher/.cursor/**
 skill-launcher/skill-launcher.log
 **/__pycache__/**
 **/logs/**
+**/task-runs/**

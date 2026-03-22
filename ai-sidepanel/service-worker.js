@@ -1,11 +1,16 @@
 importScripts('storage-utils.js', 'history-store.js', 'zip-utils.js', 'request-normalizer.js', 'skills-manager.js');
 
+const RUNNER_JOBS_KEY = 'runnerJobsState';
+const MAX_RUNNER_JOBS = 80;
+let runnerQueueProcessing = false;
+
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
     await StorageUtils.loadSettings();
     await SkillsManager.refreshSkills({ reason: 'installed' });
     await SkillsManager.scheduleRefreshAlarm();
+    await ensureRunnerJobsState();
     await StorageUtils.refreshStorageMetrics();
   } catch (error) {
     console.error('[Service Worker] onInstalled initialization failed:', error);
@@ -17,6 +22,8 @@ chrome.runtime.onStartup.addListener(async () => {
     await StorageUtils.loadSettings();
     await SkillsManager.refreshSkills({ reason: 'startup' });
     await SkillsManager.scheduleRefreshAlarm();
+    await ensureRunnerJobsState();
+    await startRunnerQueueProcessing();
   } catch (error) {
     console.error('[Service Worker] onStartup initialization failed:', error);
   }
@@ -34,12 +41,27 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.command === 'capture-tab') {
-    handleTabCapture(sendResponse);
+    handleTabCapture(request, sendResponse);
     return true;
   }
 
   if (request.command === 'process-request') {
     handleManualRequest(request, sendResponse);
+    return true;
+  }
+
+  if (request.command === 'get-runner-jobs') {
+    handleGetRunnerJobs(sendResponse);
+    return true;
+  }
+
+  if (request.command === 'get-runner-job') {
+    handleGetRunnerJob(request, sendResponse);
+    return true;
+  }
+
+  if (request.command === 'cancel-runner-job') {
+    cancelRunnerJob(request, sendResponse);
     return true;
   }
 
@@ -103,10 +125,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function handleManualRequest(request, sendResponse) {
   try {
+    const settings = await StorageUtils.loadSettings();
+    const useSkillRunner = settings.runnerConfig && settings.runnerConfig.processingTarget === 'skill-runner';
+
+    if (useSkillRunner) {
+      const queued = await enqueueSkillRunnerRequest({
+        rawRequest: request.data,
+        mode: request.mode || 'advanced',
+        source: request.source || { type: 'sidepanel' },
+        sourceTabId: null,
+        settings
+      });
+
+      sendResponse({
+        success: true,
+        accepted: true,
+        jobId: queued.job.id,
+        job: queued.job
+      });
+      startRunnerQueueProcessing();
+      return;
+    }
+
     const result = await processRequestLifecycle({
       rawRequest: request.data,
       mode: request.mode || 'advanced',
-      source: request.source || { type: 'sidepanel' }
+      source: request.source || { type: 'sidepanel' },
+      settings
     });
 
     sendResponse({
@@ -154,7 +199,7 @@ async function handleApiRequest(request, sender, sendResponse) {
 
 async function processRequestLifecycle(options) {
   const normalized = await RequestNormalizer.normalizeRequest(options.rawRequest);
-  const settings = await StorageUtils.loadSettings();
+  const settings = options.settings || await StorageUtils.loadSettings();
   const model = StorageUtils.resolveModel(settings, normalized.preferredModel);
   const skillContext = await SkillsManager.buildAgentContext(options.rawRequest, normalized);
   const useSkillRunner = settings.runnerConfig && settings.runnerConfig.processingTarget === 'skill-runner';
@@ -211,12 +256,13 @@ async function processRequestLifecycle(options) {
           model: model.value,
           requestName: normalized.name,
           selectedSkills: skillContext.selectedSkills,
-          skillsConfig: settings.skillsConfig || null
+          skillsConfig: settings.skillsConfig || null,
+          runnerCookieEnvMap: settings.runnerCookieEnvMap || {}
         })
         : await callAi(settings, model, skillContext.agentPrompt, task);
       responses.push({
         input: task.input,
-        response,
+        response: typeof response === 'string' ? response : response.output,
         success: true
       });
     } catch (error) {
@@ -288,11 +334,381 @@ async function processRequestLifecycle(options) {
   };
 }
 
+async function ensureRunnerJobsState() {
+  const state = await getRunnerJobsState();
+  if (!Array.isArray(state.jobs)) {
+    await setRunnerJobsState({ jobs: [] });
+    return;
+  }
+  const recoveredJobs = state.jobs.map((job) => {
+    if (job.status !== 'running') {
+      return job;
+    }
+    return {
+      ...job,
+      status: 'failed',
+      error: 'Interrupted: service worker restarted while running',
+      finishedAt: new Date().toISOString(),
+      activeTaskIndex: null,
+      activeTaskStartedAt: null,
+      activeTaskTimeoutMs: null
+    };
+  });
+  await setRunnerJobsState({ jobs: recoveredJobs });
+}
+
+async function getRunnerJobsState() {
+  const result = await chrome.storage.local.get([RUNNER_JOBS_KEY]);
+  const state = result[RUNNER_JOBS_KEY] || {};
+  return {
+    jobs: Array.isArray(state.jobs) ? state.jobs : []
+  };
+}
+
+async function setRunnerJobsState(state) {
+  const normalized = {
+    jobs: Array.isArray(state.jobs) ? state.jobs.slice(-MAX_RUNNER_JOBS) : []
+  };
+  await chrome.storage.local.set({ [RUNNER_JOBS_KEY]: normalized });
+  return normalized;
+}
+
+async function listRunnerJobs() {
+  const state = await getRunnerJobsState();
+  return state.jobs.slice().sort((a, b) => {
+    const left = new Date(b.createdAt || 0).getTime();
+    const right = new Date(a.createdAt || 0).getTime();
+    return left - right;
+  });
+}
+
+async function findRunnerJob(jobId) {
+  const state = await getRunnerJobsState();
+  return state.jobs.find((job) => job.id === jobId) || null;
+}
+
+async function updateRunnerJob(jobId, updater) {
+  const state = await getRunnerJobsState();
+  const index = state.jobs.findIndex((entry) => entry.id === jobId);
+  if (index < 0) {
+    return null;
+  }
+  const current = state.jobs[index];
+  const updated = updater(current);
+  state.jobs[index] = updated;
+  await setRunnerJobsState(state);
+  return updated;
+}
+
+function decorateJobsForView(jobs) {
+  const runningOrQueued = jobs
+    .filter((job) => job.status === 'running' || job.status === 'queued')
+    .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+
+  const queueLookup = new Map();
+  let queueIndex = 0;
+  runningOrQueued.forEach((job) => {
+    if (job.status === 'running') {
+      queueLookup.set(job.id, 0);
+      return;
+    }
+    queueIndex += 1;
+    queueLookup.set(job.id, queueIndex);
+  });
+
+  return jobs.map((job) => ({
+    ...job,
+    queuePosition: queueLookup.has(job.id) ? queueLookup.get(job.id) : null
+  }));
+}
+
+async function enqueueSkillRunnerRequest(options) {
+  const normalized = await RequestNormalizer.normalizeRequest(options.rawRequest);
+  const settings = options.settings || await StorageUtils.loadSettings();
+  const model = StorageUtils.resolveModel(settings, normalized.preferredModel);
+  const skillContext = await SkillsManager.buildAgentContext(options.rawRequest, normalized);
+  const sessionId = StorageUtils.createId(options.mode || 'runner-job');
+  const createdAt = new Date().toISOString();
+  const runnerConfig = settings.runnerConfig || {};
+
+  const job = {
+    id: sessionId,
+    sessionId,
+    createdAt,
+    queuedAt: createdAt,
+    startedAt: null,
+    finishedAt: null,
+    status: 'queued',
+    mode: options.mode || 'advanced',
+    source: options.source || { type: 'sidepanel' },
+    sourceTabId: options.sourceTabId || null,
+    requestName: normalized.name,
+    agent: normalized.agent,
+    model: model.value,
+    warnings: normalized.warnings,
+    skillWarnings: skillContext.warnings,
+    selectedSkills: skillContext.selectedSkills,
+    requestData: options.rawRequest,
+    normalized,
+    progress: {
+      completed: 0,
+      total: normalized.tasks.length,
+      input: ''
+    },
+    runner: {
+      type: runnerConfig.runnerType || 'claude',
+      mode: runnerConfig.runnerMode || 'remote',
+      timeoutMs: runnerConfig.timeoutMs || 120000
+    },
+    timeoutMs: runnerConfig.timeoutMs || 120000,
+    responses: [],
+    output: null,
+    error: null,
+    launcherTasks: [],
+    activeTaskIndex: null,
+    activeTaskStartedAt: null,
+    activeTaskTimeoutMs: null
+  };
+
+  const state = await getRunnerJobsState();
+  state.jobs.push(job);
+  await setRunnerJobsState(state);
+
+  return { job };
+}
+
+async function handleGetRunnerJobs(sendResponse) {
+  try {
+    const jobs = await listRunnerJobs();
+    sendResponse({ success: true, jobs: decorateJobsForView(jobs) });
+  } catch (error) {
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function handleGetRunnerJob(request, sendResponse) {
+  try {
+    const job = await findRunnerJob(request.jobId);
+    if (!job) {
+      sendResponse({ success: false, error: 'Runner job not found' });
+      return;
+    }
+    const [decorated] = decorateJobsForView([job]);
+    sendResponse({ success: true, job: decorated });
+  } catch (error) {
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function cancelRunnerJob(request, sendResponse) {
+  try {
+    const updated = await updateRunnerJob(request.jobId, (job) => {
+      if (job.status !== 'queued') {
+        return job;
+      }
+      return {
+        ...job,
+        status: 'failed',
+        error: 'Cancelled by user',
+        finishedAt: new Date().toISOString()
+      };
+    });
+
+    if (!updated) {
+      sendResponse({ success: false, error: 'Runner job not found' });
+      return;
+    }
+    sendResponse({ success: true, job: updated });
+  } catch (error) {
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function startRunnerQueueProcessing() {
+  if (runnerQueueProcessing) {
+    return;
+  }
+  runnerQueueProcessing = true;
+  try {
+    while (true) {
+      const state = await getRunnerJobsState();
+      if (state.jobs.some((job) => job.status === 'running')) {
+        break;
+      }
+
+      const next = state.jobs
+        .filter((job) => job.status === 'queued')
+        .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime())[0];
+
+      if (!next) {
+        break;
+      }
+
+      await executeRunnerJob(next.id);
+    }
+  } finally {
+    runnerQueueProcessing = false;
+    const state = await getRunnerJobsState();
+    if (state.jobs.some((job) => job.status === 'queued')) {
+      startRunnerQueueProcessing();
+    }
+  }
+}
+
+async function executeRunnerJob(jobId) {
+  const starting = await updateRunnerJob(jobId, (job) => {
+    if (job.status !== 'queued') {
+      return job;
+    }
+    return {
+      ...job,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      error: null
+    };
+  });
+
+  if (!starting || starting.status !== 'running') {
+    return;
+  }
+
+  const settings = await StorageUtils.loadSettings();
+  const responses = [];
+  const launcherTasks = [];
+  let timedOut = false;
+
+  for (let index = 0; index < starting.normalized.tasks.length; index += 1) {
+    const task = starting.normalized.tasks[index];
+
+    await updateRunnerJob(jobId, (job) => ({
+      ...job,
+      progress: {
+        completed: index,
+        total: starting.normalized.tasks.length,
+        input: task.input || ''
+      },
+      activeTaskIndex: index,
+      activeTaskStartedAt: new Date().toISOString(),
+      activeTaskTimeoutMs: job.timeoutMs || 120000
+    }));
+
+    try {
+      const response = await callSkillRunner(settings, starting.agent, task, {
+        source: starting.source,
+        mode: starting.mode,
+        model: starting.model,
+        requestName: starting.requestName,
+        selectedSkills: starting.selectedSkills,
+        skillsConfig: settings.skillsConfig || null,
+        runnerCookieEnvMap: settings.runnerCookieEnvMap || {}
+      });
+
+      responses.push({
+        input: task.input,
+        response: response.output,
+        success: true,
+        launcherTaskId: response.launcherTaskId || null,
+        outputFile: response.outputFile || null,
+        resultFile: response.resultFile || null,
+        durationMs: response.durationMs || null
+      });
+      if (response.launcherTaskId) {
+        launcherTasks.push(response.launcherTaskId);
+      }
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      responses.push({
+        input: task.input,
+        response: `ERROR: ${message}`,
+        success: false
+      });
+      if (/timed out/i.test(message)) {
+        timedOut = true;
+        break;
+      }
+    }
+
+    await updateRunnerJob(jobId, (job) => ({
+      ...job,
+      responses: responses.slice(),
+      launcherTasks: launcherTasks.slice(),
+      progress: {
+        completed: index + 1,
+        total: starting.normalized.tasks.length,
+        input: task.input || ''
+      }
+    }));
+  }
+
+  const output = {
+    name: starting.requestName,
+    model: starting.model,
+    response: responses
+  };
+  if (Array.isArray(starting.warnings) && starting.warnings.length > 0) {
+    output.warnings = starting.warnings;
+  }
+  if (Array.isArray(starting.skillWarnings) && starting.skillWarnings.length > 0) {
+    output.skillWarnings = starting.skillWarnings;
+  }
+  if (Array.isArray(starting.selectedSkills) && starting.selectedSkills.length > 0) {
+    output.appliedSkills = starting.selectedSkills;
+  }
+
+  const finalStatus = timedOut
+    ? 'timed_out'
+    : responses.some((entry) => !entry.success)
+      ? 'failed'
+      : 'completed';
+
+  await updateRunnerJob(jobId, (job) => ({
+    ...job,
+    status: finalStatus,
+    finishedAt: new Date().toISOString(),
+    responses: responses.slice(),
+    output,
+    error: finalStatus === 'completed' ? null : (timedOut ? 'Runner timed out' : 'One or more tasks failed'),
+    progress: {
+      completed: responses.length,
+      total: starting.normalized.tasks.length,
+      input: ''
+    },
+    activeTaskIndex: null,
+    activeTaskStartedAt: null,
+    activeTaskTimeoutMs: null,
+    launcherTasks: launcherTasks.slice()
+  }));
+
+  await HistoryStore.saveConversation({
+    id: starting.sessionId,
+    mode: starting.mode,
+    createdAt: starting.createdAt,
+    source: starting.source,
+    model: starting.model,
+    requestName: starting.requestName,
+    requestData: starting.requestData,
+    outputData: output,
+    warnings: starting.warnings,
+    selectedSkills: starting.selectedSkills
+  });
+
+  await StorageUtils.refreshStorageMetrics();
+}
+
 function buildRunnerInput(agentPrompt, task, context) {
   const safeContext = context && typeof context === 'object' ? context : {};
   const source = safeContext.source && typeof safeContext.source === 'object' ? safeContext.source : {};
   const selectedSkills = Array.isArray(safeContext.selectedSkills) ? safeContext.selectedSkills : [];
   const cookies = Array.isArray(source.cookies) ? source.cookies : [];
+  const cookiesByDomain = source.cookiesByDomain && typeof source.cookiesByDomain === 'object'
+    ? source.cookiesByDomain
+    : {};
+  const cookieHeadersByDomain = source.cookieHeadersByDomain && typeof source.cookieHeadersByDomain === 'object'
+    ? source.cookieHeadersByDomain
+    : {};
+  const cookieEnvMap = safeContext.runnerCookieEnvMap && typeof safeContext.runnerCookieEnvMap === 'object'
+    ? safeContext.runnerCookieEnvMap
+    : {};
   const sessionStorageSnapshot = source.sessionStorageSnapshot || {};
   const localStorageSnapshot = source.localStorageSnapshot || {};
   const taskImages = Array.isArray(task && task.images) ? task.images : [];
@@ -323,6 +739,9 @@ function buildRunnerInput(agentPrompt, task, context) {
     sessionInfo: {
       cookies,
       cookieHeader: source.cookieHeader || '',
+      cookiesByDomain,
+      cookieHeadersByDomain,
+      cookieEnvMap,
       sessionStorageSnapshot,
       localStorageSnapshot,
       sessionInfoAllowed: !!source.sessionInfoAllowed
@@ -364,15 +783,20 @@ function sendNativeMessage(hostName, message) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function invokeLocalRunner(runnerConfig, runnerInput, context) {
   const hostName = runnerConfig.nativeHostName || 'com.local.skillrunner.host';
   const promptArg = getRunnerPromptArg(runnerConfig.runnerType);
+  const timeoutMs = runnerConfig.timeoutMs || 120000;
   const response = await sendNativeMessage(hostName, {
     action: 'run-skill-runner',
     runner: runnerConfig.runnerType || 'claude',
     promptArg,
     runnerInput,
-    timeoutMs: runnerConfig.timeoutMs || 120000,
+    timeoutMs,
     skillsConfig: context && context.skillsConfig ? context.skillsConfig : null,
     context
   });
@@ -385,11 +809,59 @@ async function invokeLocalRunner(runnerConfig, runnerInput, context) {
     throw new Error(response.error || 'Local runner execution failed');
   }
 
-  if (typeof response.output === 'string' && response.output.trim()) {
-    return response.output;
+  if (response.accepted && response.task && response.task.id) {
+    return waitForLocalRunnerTask(hostName, response.task.id, timeoutMs + 15000);
   }
 
-  return JSON.stringify(response);
+  if (typeof response.output === 'string' && response.output.trim()) {
+    return {
+      output: response.output,
+      launcherTaskId: response.taskId || null,
+      outputFile: response.outputFile || null,
+      resultFile: response.resultFile || null,
+      durationMs: response.durationMs || null
+    };
+  }
+
+  return {
+    output: JSON.stringify(response),
+    launcherTaskId: response.taskId || null
+  };
+}
+
+async function waitForLocalRunnerTask(hostName, taskId, deadlineMs) {
+  const start = Date.now();
+  while (Date.now() - start <= deadlineMs) {
+    const response = await sendNativeMessage(hostName, {
+      action: 'get-task-status',
+      taskId,
+      includeOutput: true
+    });
+
+    if (!response || response.success === false) {
+      throw new Error((response && response.error) || 'Failed to fetch local runner task status');
+    }
+
+    const task = response.task || {};
+    if (task.status === 'completed') {
+      const result = task.result || {};
+      return {
+        output: typeof result.output === 'string' ? result.output : JSON.stringify(result),
+        launcherTaskId: task.id,
+        outputFile: result.outputFile || null,
+        resultFile: task.resultFile || null,
+        durationMs: result.durationMs || null
+      };
+    }
+
+    if (task.status === 'failed' || task.status === 'timed_out') {
+      throw new Error(task.error || (task.result && task.result.error) || `Runner task ${task.status}`);
+    }
+
+    await sleep(1000);
+  }
+
+  throw new Error(`Local runner task timed out after ${deadlineMs} ms`);
 }
 
 async function invokeRemoteRunner(runnerConfig, runnerInput, context) {
@@ -399,6 +871,7 @@ async function invokeRemoteRunner(runnerConfig, runnerInput, context) {
   }
 
   const promptArg = getRunnerPromptArg(runnerConfig.runnerType);
+  const timeoutMs = runnerConfig.timeoutMs || 120000;
   const response = await fetch(remoteUrl, {
     method: 'POST',
     headers: {
@@ -408,7 +881,7 @@ async function invokeRemoteRunner(runnerConfig, runnerInput, context) {
       runner: runnerConfig.runnerType || 'claude',
       promptArg,
       runnerInput,
-      timeoutMs: runnerConfig.timeoutMs || 120000,
+      timeoutMs,
       skillsConfig: context && context.skillsConfig ? context.skillsConfig : null,
       context
     })
@@ -419,19 +892,69 @@ async function invokeRemoteRunner(runnerConfig, runnerInput, context) {
     throw new Error(`Remote runner failed (${response.status}): ${errorText}`);
   }
 
-  const contentType = (response.headers.get('content-type') || '').toLowerCase();
-  if (contentType.includes('application/json')) {
-    const data = await response.json();
-    if (data && data.success === false) {
-      throw new Error(data.error || 'Remote runner execution failed');
-    }
-    if (data && typeof data.output === 'string') {
-      return data.output;
-    }
-    return JSON.stringify(data);
+  const data = await response.json();
+  if (data && data.success === false) {
+    throw new Error(data.error || 'Remote runner execution failed');
   }
 
-  return response.text();
+  if (data && data.accepted && data.task && data.task.id) {
+    return waitForRemoteRunnerTask(remoteUrl, data.task.id, timeoutMs + 15000);
+  }
+
+  if (data && typeof data.output === 'string') {
+    return {
+      output: data.output,
+      launcherTaskId: data.taskId || null,
+      outputFile: data.outputFile || null,
+      resultFile: data.resultFile || null,
+      durationMs: data.durationMs || null
+    };
+  }
+
+  return {
+    output: JSON.stringify(data),
+    launcherTaskId: data && data.taskId ? data.taskId : null
+  };
+}
+
+function buildTaskStatusUrl(remoteRunnerUrl, taskId) {
+  const root = remoteRunnerUrl.replace(/\/?run\/?$/i, '').replace(/\/$/, '');
+  return `${root}/tasks/${encodeURIComponent(taskId)}?includeOutput=1`;
+}
+
+async function waitForRemoteRunnerTask(remoteUrl, taskId, deadlineMs) {
+  const start = Date.now();
+  while (Date.now() - start <= deadlineMs) {
+    const statusUrl = buildTaskStatusUrl(remoteUrl, taskId);
+    const response = await fetch(statusUrl, { method: 'GET' });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Runner status failed (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
+    const task = data.task || {};
+
+    if (task.status === 'completed') {
+      const result = task.result || {};
+      return {
+        output: typeof result.output === 'string' ? result.output : JSON.stringify(result),
+        launcherTaskId: task.id,
+        outputFile: result.outputFile || null,
+        resultFile: task.resultFile || null,
+        durationMs: result.durationMs || null
+      };
+    }
+
+    if (task.status === 'failed' || task.status === 'timed_out') {
+      throw new Error(task.error || (task.result && task.result.error) || `Runner task ${task.status}`);
+    }
+
+    await sleep(1000);
+  }
+
+  throw new Error(`Remote runner task timed out after ${deadlineMs} ms`);
 }
 
 function buildUpdateSkillsUrl(remoteRunnerUrl) {
@@ -540,7 +1063,42 @@ async function sendStatusUpdate(tabId, payload) {
   }
 }
 
-async function handleTabCapture(sendResponse) {
+function normalizeCookieDomain(domain) {
+  return String(domain || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^\*\./, '')
+    .replace(/\/.*$/, '')
+    .replace(/:\d+$/, '');
+}
+
+async function collectTrustedDomainCookies(trustedDomains) {
+  const domains = Array.isArray(trustedDomains)
+    ? trustedDomains.map((entry) => normalizeCookieDomain(entry)).filter(Boolean)
+    : [];
+  const cookiesByDomain = {};
+  const cookieHeadersByDomain = {};
+
+  for (const domain of domains) {
+    try {
+      const cookies = await chrome.cookies.getAll({ domain });
+      cookiesByDomain[domain] = cookies;
+      cookieHeadersByDomain[domain] = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+    } catch (error) {
+      console.warn('[Service Worker] Unable to read trusted-domain cookies:', domain, error);
+      cookiesByDomain[domain] = [];
+      cookieHeadersByDomain[domain] = '';
+    }
+  }
+
+  return {
+    cookiesByDomain,
+    cookieHeadersByDomain
+  };
+}
+
+async function handleTabCapture(request, sendResponse) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) {
@@ -565,6 +1123,8 @@ async function handleTabCapture(sendResponse) {
       console.warn('[Service Worker] Unable to read cookies for tab:', cookieError);
     }
 
+    const trustedCookies = await collectTrustedDomainCookies(request && request.trustedDomains);
+
     sendResponse({
       success: true,
       data: {
@@ -578,7 +1138,9 @@ async function handleTabCapture(sendResponse) {
         localStorageSnapshot: pageData.localStorageSnapshot || {},
         sessionStorageSnapshot: pageData.sessionStorageSnapshot || {},
         cookies,
-        cookieHeader
+        cookieHeader,
+        cookiesByDomain: trustedCookies.cookiesByDomain,
+        cookieHeadersByDomain: trustedCookies.cookieHeadersByDomain
       }
     });
   } catch (error) {

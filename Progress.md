@@ -238,3 +238,31 @@ Planned work items:
 - [x] Keep non skill-runner API mode behavior unchanged.
 - [x] Update `ai-sidepanel/README.md` and `skill-launcher/README.md` to document the structured runner contract and launcher-built context behavior.
 - [x] Add implementation notes/edge cases discovered during this refactor to `Agent-Notes.md`.
+
+## Date - 22/Mar/2026
+
+### AI generated updates
+
+#### Proposed checklist - Skill Runner Reliability + Task Queue + Multi-Domain Cookie Env Mapping
+
+Requested change:
+- Replace long-lived skill-runner request waiting with queued job processing in extension.
+- Add current-task queue UX with timeout countdown and collapsible results.
+- Forward cookies for all trusted domains with domain-specific env var mapping in runner.
+- Add launcher-side queued execution with file-backed output artifacts and task status APIs.
+
+Planned work items:
+- [x] Add skill-runner queue lifecycle storage in extension (`queued`, `running`, `completed`, `failed`, `timed_out`) with timestamps and timeout metadata.
+- [x] Refactor service worker `process-request` path to return immediate `accepted + jobId` for skill-runner requests and process queue asynchronously (FIFO, single worker).
+- [x] Add runtime commands for queue consumers (`get-runner-jobs`, `get-runner-job`, optional cancel placeholder).
+- [x] Update sidepanel UI with `Current Tasks` vs `History` toggle view, queue list, elapsed/wait timer, timeout countdown, and expandable completed task results.
+- [x] Move existing history list into the toggleable `History` view without losing prior history behavior.
+- [x] Add runner cookie env mapping setting (`domain=ENV_VAR`) with normalized persistence (`runnerCookieEnvMap`) and auto-domain defaults.
+- [x] Extend tab/session capture to include cookies across all trusted domains and pass `cookiesByDomain`/`cookieHeadersByDomain` in runner payload.
+- [x] Update skill-launcher to enqueue tasks, run from queue, persist per-task files (`stdout`, `stderr`, metadata/result), and expose task status/result endpoints for remote/native modes.
+- [x] Export per-domain cookie env vars before runner launch, preserving existing `SKILL_RUNNER_SESSION_INFO` contract.
+- [x] Update `ai-sidepanel/README.md`, `skill-launcher/README.md`, and add implementation findings to `Agent-Notes.md`.
+
+Status:
+- Implementation completed by AI on 22/Mar/2026.
+- Human validation pending.
