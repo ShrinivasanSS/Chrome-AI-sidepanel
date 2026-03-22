@@ -86,6 +86,7 @@ class SkillLauncher:
         self._tasks: Dict[str, Dict] = {}
         self._task_order: List[str] = []
         self._queue: List[str] = []
+        self._skills_sync_cache: Dict[str, Dict] = {}
         self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="skill-launcher-worker")
         self._worker.start()
 
@@ -98,7 +99,12 @@ class SkillLauncher:
             })
 
     def handle_payload(self, payload: Dict) -> Dict:
-        self._log("incoming_payload", payload)
+        self._log("incoming_payload", {
+            "action": payload.get("action"),
+            "runner": payload.get("runner"),
+            "hasRunnerInput": isinstance(payload.get("runnerInput"), dict),
+            "timeoutMs": payload.get("timeoutMs"),
+        })
         action = _normalize_text(payload.get("action"))
 
         if action == "update-skills":
@@ -248,27 +254,31 @@ class SkillLauncher:
         stdout_file = task_dir / "stdout.txt"
         stderr_file = task_dir / "stderr.txt"
         result_file = task_dir / "result.json"
+        command_file = task_dir / "launch-command.json"
         request_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-        sync_summary = self.sync_skills(skills_config, runner)
+        sync_summary = self._sync_skills_cached(skills_config, runner)
         command = self._build_command(runner, prompt_arg, prompt)
         skills_dir = self._runner_skills_dir(runner)
+        command_file.write_text(json.dumps({
+            "taskId": task_id,
+            "runner": runner,
+            "promptArg": prompt_arg,
+            "command": command,
+            "commandText": " ".join(shlex.quote(part) for part in command),
+            "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, indent=2), encoding="utf-8")
 
         env = os.environ.copy()
         env["SKILL_RUNNER_TYPE"] = runner
         env["SKILL_RUNNER_SKILLS_DIR"] = str(skills_dir)
         env["SKILL_RUNNER_WORKDIR"] = str(self.launcher_root)
-        env["SKILL_RUNNER_CONTEXT"] = _json_dumps(context)
         session_info = self._build_session_info(runner_input, context)
-        cookie_header = _normalize_text(session_info.get("cookieHeader"))
         cookies = session_info.get("cookies")
         if not isinstance(cookies, list):
             cookies = []
             session_info["cookies"] = cookies
-        env["SKILL_RUNNER_SESSION_INFO"] = _json_dumps(session_info)
-        env["SKILL_RUNNER_COOKIE_HEADER"] = cookie_header
         env["SKILL_RUNNER_COOKIES_JSON"] = _json_dumps(cookies)
-        env["SKILL_RUNNER_INPUT"] = _json_dumps(runner_input or {})
         self._export_domain_cookie_envs(env, session_info)
 
         log_env = {
@@ -277,9 +287,6 @@ class SkillLauncher:
                 "SKILL_RUNNER_TYPE",
                 "SKILL_RUNNER_SKILLS_DIR",
                 "SKILL_RUNNER_WORKDIR",
-                "SKILL_RUNNER_CONTEXT",
-                "SKILL_RUNNER_SESSION_INFO",
-                "SKILL_RUNNER_COOKIE_HEADER",
                 "SKILL_RUNNER_COOKIES_JSON",
                 "SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN",
             )
@@ -324,6 +331,7 @@ class SkillLauncher:
                     "stderrFile": str(stderr_file),
                     "outputFile": str(stdout_file),
                     "resultFile": str(result_file),
+                    "launchCommandFile": str(command_file),
                 }
                 result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
                 self._log("runner_exit_nonzero", payload)
@@ -340,6 +348,7 @@ class SkillLauncher:
                 "stderrFile": str(stderr_file),
                 "outputFile": str(stdout_file if stdout else stderr_file),
                 "resultFile": str(result_file),
+                "launchCommandFile": str(command_file),
             }
             result_file.write_text(json.dumps(success_payload, indent=2), encoding="utf-8")
             self._log("runner_exit_success", success_payload)
@@ -355,6 +364,7 @@ class SkillLauncher:
                 "stderrFile": str(stderr_file),
                 "outputFile": str(stdout_file),
                 "resultFile": str(result_file),
+                "launchCommandFile": str(command_file),
             }
             result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             self._log("runner_error", payload)
@@ -372,6 +382,7 @@ class SkillLauncher:
                 "stderrFile": str(stderr_file),
                 "outputFile": str(stdout_file),
                 "resultFile": str(result_file),
+                "launchCommandFile": str(command_file),
             }
             result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             self._log("runner_error", payload)
@@ -387,6 +398,7 @@ class SkillLauncher:
                 "stderrFile": str(stderr_file),
                 "outputFile": str(stdout_file),
                 "resultFile": str(result_file),
+                "launchCommandFile": str(command_file),
             }
             result_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             self._log("runner_error", payload)
@@ -440,7 +452,12 @@ class SkillLauncher:
         for domain, header in normalized_headers.items():
             fallback = _default_cookie_env_name(domain)
             env_name = normalized_env_map.get(domain) or _normalize_env_name(None, fallback)
-            env[env_name] = header
+            env_payload = {
+                "domain": domain,
+                "cookieHeader": header,
+                "cookies": normalized_cookies.get(domain, []),
+            }
+            env[env_name] = _json_dumps(env_payload)
             env[f"{env_name}_JSON"] = _json_dumps(normalized_cookies.get(domain, []))
 
         env["SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN"] = _json_dumps(normalized_headers)
@@ -491,6 +508,7 @@ class SkillLauncher:
         request = runner_input.get("request") if isinstance(runner_input.get("request"), dict) else {}
         source = runner_input.get("source") if isinstance(runner_input.get("source"), dict) else {}
         page_content = runner_input.get("pageContent") if isinstance(runner_input.get("pageContent"), dict) else {}
+        active_tab_info = runner_input.get("activeTabInfo") if isinstance(runner_input.get("activeTabInfo"), dict) else {}
         session_info = runner_input.get("sessionInfo") if isinstance(runner_input.get("sessionInfo"), dict) else {}
         skills = runner_input.get("skills")
         if not isinstance(skills, list):
@@ -501,23 +519,27 @@ class SkillLauncher:
 
         user_message = _normalize_text(runner_input.get("userMessage"))
         task_input = _normalize_text(runner_input.get("taskInput"))
-        normalized_task_text = _normalize_text(runner_input.get("normalizedTaskText"))
         agent_instructions = _normalize_text(runner_input.get("agentInstructions"))
 
         session_allowed = bool(session_info.get("sessionInfoAllowed"))
-        cookie_header = _normalize_text(session_info.get("cookieHeader"))
         session_guidance = [
             "Session handling guidance:",
-            "- If authenticated access is required, first check SKILL_RUNNER_COOKIE_HEADER.",
-            "- For domain-specific cookies, check SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN and mapped *_COOKIES env vars.",
-            "- You can use curl with a cookie header value from env vars.",
-            "- For Playwright/browser automation, parse SKILL_RUNNER_SESSION_INFO JSON and reuse cookies.",
+            "- Available env vars for auth/session:",
+            "  - SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN: JSON map {domain: cookieHeader}.",
+            "  - SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON: JSON map {domain: [cookie objects]}.",
+            "  - <DOMAIN>_COOKIES: JSON string {domain, cookieHeader, cookies}.",
+            "  - <DOMAIN>_COOKIES_JSON: JSON array of cookies for that domain.",
+            "  - SKILL_RUNNER_COOKIES_JSON: active-tab cookie array (legacy/compat).",
+            "- Use curl when a direct HTTP call is enough:",
+            "  - Read cookie header from SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN or <DOMAIN>_COOKIES.",
+            "  - Call: curl -H \"Cookie: <header>\" <url>.",
+            "- Use a script (Playwright/Python/Node) when multi-step login/stateful flows are needed:",
+            "  - Parse <DOMAIN>_COOKIES or <DOMAIN>_COOKIES_JSON and set cookies programmatically.",
+            "  - Reuse those cookies across steps instead of re-authenticating.",
             "- Treat cookies/session as sensitive and avoid echoing full secrets in output.",
         ]
         if not session_allowed:
             session_guidance.append("- Session info is not trusted/allowed for this request; continue without authenticated cookie replay.")
-        elif not cookie_header:
-            session_guidance.append("- Session forwarding is allowed, but active-tab cookie header is empty.")
 
         sections = [
             "You are running inside the skill launcher contract.",
@@ -544,6 +566,9 @@ class SkillLauncher:
                 "meta": page_content.get("meta", {}),
                 "links": page_content.get("links", []),
             }),
+            "",
+            "Active tab info:",
+            _json_dumps(active_tab_info),
             "",
             "Session info:",
             _json_dumps(session_info),
@@ -573,18 +598,22 @@ class SkillLauncher:
                 "",
             ])
 
-        if normalized_task_text:
-            sections.extend([
-                "Normalized task payload:",
-                normalized_task_text,
-                "",
-            ])
-
         sections.extend([
             "User message:",
             user_message or "(empty user message)",
         ])
         return "\n".join(sections)
+
+    def _sync_skills_cached(self, skills_config: Dict, runner: str) -> Dict:
+        repository_url = _normalize_text(skills_config.get("repositoryUrl"))
+        key = f"{runner}|{repository_url}|{bool(skills_config.get('repositoryEnabled', True))}"
+        now = time.time()
+        cached = self._skills_sync_cache.get(key)
+        if cached and (now - cached.get("ts", 0)) < 300:
+            return cached.get("value", {"status": "ok", "cached": True})
+        result = self.sync_skills(skills_config, runner)
+        self._skills_sync_cache[key] = {"ts": now, "value": result}
+        return result
 
     def sync_skills(self, skills_config: Dict, runner: str) -> Dict:
         repository_enabled = bool(skills_config.get("repositoryEnabled", True))

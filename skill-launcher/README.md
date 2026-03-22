@@ -26,13 +26,9 @@ It supports two interfaces:
 - Builds final runner prompt text from structured `runnerInput` JSON contract
 - Adds built-in runner guidance for authenticated `curl`/Playwright flows using env-provided cookies/session
 - Sets environment variables for runner process:
-  - `SKILL_RUNNER_CONTEXT`
-  - `SKILL_RUNNER_SESSION_INFO` (trusted-domain cookies/session snapshot payload)
-  - `SKILL_RUNNER_COOKIE_HEADER`
   - `SKILL_RUNNER_COOKIES_JSON`
   - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN`
-  - domain mapped vars (for example `LOCALHOST_COOKIES`, plus `*_JSON`)
-  - `SKILL_RUNNER_INPUT`
+  - domain mapped vars (for example `LOCALHOST_COOKIES`) as JSON-formatted strings, plus `*_JSON`
 
 ## Run (Remote Mode)
 

@@ -3,6 +3,7 @@ importScripts('storage-utils.js', 'history-store.js', 'zip-utils.js', 'request-n
 const RUNNER_JOBS_KEY = 'runnerJobsState';
 const MAX_RUNNER_JOBS = 80;
 let runnerQueueProcessing = false;
+const runnerJobRuntimeCache = new Map();
 
 chrome.runtime.onInstalled.addListener(async () => {
   try {
@@ -430,6 +431,21 @@ async function enqueueSkillRunnerRequest(options) {
   const sessionId = StorageUtils.createId(options.mode || 'runner-job');
   const createdAt = new Date().toISOString();
   const runnerConfig = settings.runnerConfig || {};
+  const source = options.source || { type: 'sidepanel' };
+  runnerJobRuntimeCache.set(sessionId, {
+    normalized,
+    requestData: options.rawRequest,
+    source,
+    sourceTabId: options.sourceTabId || null,
+    skillWarnings: skillContext.warnings || [],
+    selectedSkills: skillContext.selectedSkills || [],
+    warnings: normalized.warnings || [],
+    agent: normalized.agent,
+    requestName: normalized.name,
+    mode: options.mode || 'advanced',
+    model: model.value,
+    createdAt
+  });
 
   const job = {
     id: sessionId,
@@ -440,16 +456,12 @@ async function enqueueSkillRunnerRequest(options) {
     finishedAt: null,
     status: 'queued',
     mode: options.mode || 'advanced',
-    source: options.source || { type: 'sidepanel' },
-    sourceTabId: options.sourceTabId || null,
+    source: summarizeSourceForQueue(source),
     requestName: normalized.name,
-    agent: normalized.agent,
     model: model.value,
     warnings: normalized.warnings,
     skillWarnings: skillContext.warnings,
     selectedSkills: skillContext.selectedSkills,
-    requestData: options.rawRequest,
-    normalized,
     progress: {
       completed: 0,
       total: normalized.tasks.length,
@@ -518,6 +530,7 @@ async function cancelRunnerJob(request, sendResponse) {
       sendResponse({ success: false, error: 'Runner job not found' });
       return;
     }
+    runnerJobRuntimeCache.delete(request.jobId);
     sendResponse({ success: true, job: updated });
   } catch (error) {
     sendResponse({ success: false, error: error.message });
@@ -571,20 +584,33 @@ async function executeRunnerJob(jobId) {
   if (!starting || starting.status !== 'running') {
     return;
   }
+  const runtime = runnerJobRuntimeCache.get(jobId);
+  if (!runtime || !runtime.normalized || !Array.isArray(runtime.normalized.tasks)) {
+    await updateRunnerJob(jobId, (job) => ({
+      ...job,
+      status: 'failed',
+      error: 'Queued payload not available (service worker restarted)',
+      finishedAt: new Date().toISOString(),
+      activeTaskIndex: null,
+      activeTaskStartedAt: null,
+      activeTaskTimeoutMs: null
+    }));
+    return;
+  }
 
   const settings = await StorageUtils.loadSettings();
   const responses = [];
   const launcherTasks = [];
   let timedOut = false;
 
-  for (let index = 0; index < starting.normalized.tasks.length; index += 1) {
-    const task = starting.normalized.tasks[index];
+  for (let index = 0; index < runtime.normalized.tasks.length; index += 1) {
+    const task = runtime.normalized.tasks[index];
 
     await updateRunnerJob(jobId, (job) => ({
       ...job,
       progress: {
         completed: index,
-        total: starting.normalized.tasks.length,
+        total: runtime.normalized.tasks.length,
         input: task.input || ''
       },
       activeTaskIndex: index,
@@ -593,9 +619,9 @@ async function executeRunnerJob(jobId) {
     }));
 
     try {
-      const response = await callSkillRunner(settings, starting.agent, task, {
-        source: starting.source,
-        mode: starting.mode,
+      const response = await callSkillRunner(settings, runtime.agent, task, {
+        source: runtime.source,
+        mode: runtime.mode,
         model: starting.model,
         requestName: starting.requestName,
         selectedSkills: starting.selectedSkills,
@@ -634,7 +660,7 @@ async function executeRunnerJob(jobId) {
       launcherTasks: launcherTasks.slice(),
       progress: {
         completed: index + 1,
-        total: starting.normalized.tasks.length,
+        total: runtime.normalized.tasks.length,
         input: task.input || ''
       }
     }));
@@ -670,7 +696,7 @@ async function executeRunnerJob(jobId) {
     error: finalStatus === 'completed' ? null : (timedOut ? 'Runner timed out' : 'One or more tasks failed'),
     progress: {
       completed: responses.length,
-      total: starting.normalized.tasks.length,
+      total: runtime.normalized.tasks.length,
       input: ''
     },
     activeTaskIndex: null,
@@ -681,18 +707,28 @@ async function executeRunnerJob(jobId) {
 
   await HistoryStore.saveConversation({
     id: starting.sessionId,
-    mode: starting.mode,
-    createdAt: starting.createdAt,
-    source: starting.source,
+    mode: runtime.mode,
+    createdAt: runtime.createdAt,
+    source: runtime.source,
     model: starting.model,
     requestName: starting.requestName,
-    requestData: starting.requestData,
+    requestData: runtime.requestData,
     outputData: output,
-    warnings: starting.warnings,
-    selectedSkills: starting.selectedSkills
+    warnings: runtime.warnings,
+    selectedSkills: runtime.selectedSkills
   });
 
   await StorageUtils.refreshStorageMetrics();
+  runnerJobRuntimeCache.delete(jobId);
+}
+
+function summarizeSourceForQueue(source) {
+  const safe = source && typeof source === 'object' ? source : {};
+  return {
+    type: safe.type || 'unknown',
+    url: safe.url || '',
+    title: safe.title || ''
+  };
 }
 
 function buildRunnerInput(agentPrompt, task, context) {
@@ -709,8 +745,6 @@ function buildRunnerInput(agentPrompt, task, context) {
   const cookieEnvMap = safeContext.runnerCookieEnvMap && typeof safeContext.runnerCookieEnvMap === 'object'
     ? safeContext.runnerCookieEnvMap
     : {};
-  const sessionStorageSnapshot = source.sessionStorageSnapshot || {};
-  const localStorageSnapshot = source.localStorageSnapshot || {};
   const taskImages = Array.isArray(task && task.images) ? task.images : [];
 
   return {
@@ -722,7 +756,7 @@ function buildRunnerInput(agentPrompt, task, context) {
     agentInstructions: agentPrompt || '',
     userMessage: task && typeof task.input === 'string' ? task.input : '',
     taskInput: task && typeof task.input === 'string' ? task.input : '',
-    normalizedTaskText: task && typeof task.userText === 'string' ? task.userText : '',
+    normalizedTaskText: task && typeof task.input === 'string' ? task.input : '',
     taskImages,
     skills: selectedSkills,
     source: {
@@ -736,14 +770,19 @@ function buildRunnerInput(agentPrompt, task, context) {
       meta: source.meta || {},
       links: Array.isArray(source.links) ? source.links : []
     },
+    activeTabInfo: {
+      url: source.url || '',
+      title: source.title || '',
+      meta: source.meta || {},
+      headings: Array.isArray(source.headings) ? source.headings : [],
+      links: Array.isArray(source.links) ? source.links : []
+    },
     sessionInfo: {
       cookies,
       cookieHeader: source.cookieHeader || '',
       cookiesByDomain,
       cookieHeadersByDomain,
       cookieEnvMap,
-      sessionStorageSnapshot,
-      localStorageSnapshot,
       sessionInfoAllowed: !!source.sessionInfoAllowed
     }
   };
@@ -858,7 +897,7 @@ async function waitForLocalRunnerTask(hostName, taskId, deadlineMs) {
       throw new Error(task.error || (task.result && task.result.error) || `Runner task ${task.status}`);
     }
 
-    await sleep(1000);
+    await sleep(2000);
   }
 
   throw new Error(`Local runner task timed out after ${deadlineMs} ms`);
@@ -951,7 +990,7 @@ async function waitForRemoteRunnerTask(remoteUrl, taskId, deadlineMs) {
       throw new Error(task.error || (task.result && task.result.error) || `Runner task ${task.status}`);
     }
 
-    await sleep(1000);
+    await sleep(2000);
   }
 
   throw new Error(`Remote runner task timed out after ${deadlineMs} ms`);

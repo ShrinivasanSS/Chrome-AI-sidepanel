@@ -266,3 +266,19 @@ Planned work items:
 Status:
 - Implementation completed by AI on 22/Mar/2026.
 - Human validation pending.
+
+#### Follow-up update - Runner payload slimming + CPU optimization
+
+Requested change:
+- Do not embed full normalized task context (cookies/tab payload) into runner task text.
+- Keep cookies/tab info as structured fields; export cookies in env as JSON-formatted values.
+- Reduce CPU/fan load while tasks are running.
+
+Completed:
+- [x] Service worker now sends runner task text without large normalized cookie/tab blobs; active-tab info and cookie maps remain in dedicated structured fields.
+- [x] Launcher prompt builder removed `normalizedTaskText` expansion to avoid re-injecting bulky request payloads.
+- [x] Launcher env export now sends cookie values as JSON strings per mapped domain env var, with domain cookie maps in `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN`.
+- [x] Removed large context/session blobs from launcher env to reduce payload churn.
+- [x] Reduced polling pressure (`1s -> 2s`) for runner task status checks in extension and launcher wait loops.
+- [x] Reduced extension storage churn by persisting lean queue state and keeping heavy runtime payloads in memory during execution.
+- [x] Added per-task launch command artifact in `task-runs/<task-id>/launch-command.json` and included its path in `result.json`.

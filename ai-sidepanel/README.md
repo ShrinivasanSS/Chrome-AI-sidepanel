@@ -202,10 +202,11 @@ For sidepanel Basic and Advanced modes:
 - Queue states: `queued`, `running`, `completed`, `failed`, `timed_out`.
 - Sidepanel polls queue status and shows wait/timeout timers in `Current Tasks`.
 - In User mode, Basic prompt flow sends structured JSON context to runner host:
-  - `runnerInput.userMessage` + `runnerInput.normalizedTaskText`
+  - `runnerInput.userMessage` + `runnerInput.taskInput` (without bulky normalized cookie/tab blobs)
   - `runnerInput.sessionInfo` (cookies + storage snapshots)
   - `runnerInput.skills` (selected skill metadata)
   - `runnerInput.pageContent` (page text/headings/meta/links when enabled)
+  - `runnerInput.activeTabInfo` (active tab metadata in separate JSON field)
   - `runnerInput.request` + `runnerInput.source` metadata
 - Extension no longer builds a monolithic runner prompt string in skill-runner mode.
 - Host payload includes:

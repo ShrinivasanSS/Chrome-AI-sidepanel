@@ -70,3 +70,7 @@ Use this section for reducing repeated searches.
 - Capturing cookies for all trusted domains should be done in service worker (`chrome.cookies.getAll({ domain })`), not in content scripts.
 - Launcher task execution is more debuggable when each run writes `request.json`, `stdout.txt`, `stderr.txt`, and `result.json` under a per-task directory and task APIs return those file paths.
 - For domain cookie envs, sanitize env names to uppercase `[A-Z0-9_]` and auto-generate defaults like `<DOMAIN>_COOKIES` when explicit mapping is missing.
+- Heavy per-job payloads (`normalized` task objects + full source blobs) cause high CPU when queue state is persisted frequently; keep heavy execution payload in memory and persist only queue metadata/progress.
+- Polling both sidepanel and runner status every second is unnecessarily expensive for long tasks; moving to 2-second polling significantly reduces background churn while preserving UX.
+- If runner prompt already receives structured `activeTabInfo` + `sessionInfo`, avoid also appending `normalizedTaskText` since it often duplicates large cookie/tab JSON and bloats tokens/logs.
+- For incident/debug reporting, store the exact launched command per runner task in `task-runs/<task-id>/launch-command.json` and reference it from `result.json`.

@@ -77,7 +77,7 @@ async function initializeSidepanel() {
   await loadApiSession();
   switchActivityView('tasks');
   await refreshActivityPanels();
-  jobsPollHandle = setInterval(refreshRunnerJobs, 1000);
+  jobsPollHandle = setInterval(refreshRunnerJobs, 2000);
 }
 
 function handleStorageChanges(changes, areaName) {
@@ -199,6 +199,9 @@ async function handleRun() {
     parsed.modelId = getSelectedModelId();
 
     let requestPayload = parsed;
+    const useSkillRunner = currentSettings
+      && currentSettings.runnerConfig
+      && currentSettings.runnerConfig.processingTarget === 'skill-runner';
     let source = { type: 'sidepanel-advanced' };
     if (includeTabContent || includeSessionInfo) {
       const trustedDomains = (currentSettings && currentSettings.trustedSessionDomains) || [];
@@ -206,11 +209,13 @@ async function handleRun() {
       const trustedActive = isTrustedDomain(tabData.url, trustedDomains);
       const allowSession = includeSessionInfo && trustedDomains.length > 0;
       const includeStorageSnapshots = allowSession && trustedActive;
-      requestPayload = attachActiveTabContextToRequest(parsed, tabData, {
-        includePageContent: includeTabContent,
-        includeSession: allowSession,
-        includeStorageSnapshots
-      });
+      if (!useSkillRunner) {
+        requestPayload = attachActiveTabContextToRequest(parsed, tabData, {
+          includePageContent: includeTabContent,
+          includeSession: allowSession,
+          includeStorageSnapshots
+        });
+      }
       source = {
         type: 'sidepanel-advanced',
         url: tabData.url,
@@ -277,6 +282,9 @@ async function handleCapture() {
       type: 'sidepanel-basic'
     };
 
+    const useSkillRunner = currentSettings
+      && currentSettings.runnerConfig
+      && currentSettings.runnerConfig.processingTarget === 'skill-runner';
     if (includeTabContent || includeSessionInfo) {
       showStatus(basicStatus, 'Capturing current tab...', 'loading');
       const trustedDomains = (currentSettings && currentSettings.trustedSessionDomains) || [];
@@ -289,36 +297,43 @@ async function handleCapture() {
         : includeStorageSnapshots
           ? 'Trusted cookies + active-tab storage included.'
           : 'Trusted-domain cookies included (active-tab storage skipped; tab domain not trusted).';
-      request = {
-        agent: 'You are a helpful AI assistant that analyzes web pages using the provided text and screenshots.',
-        name: 'PAGE_ANALYZER',
-        modelId: getSelectedModelId(),
-        params: [{
-          input: question,
-          data: [
-            `Page Title: ${tabData.title}`,
-            `Page URL: ${tabData.url}`,
-            includeTabContent ? `Page Content: ${tabData.pageText || ''}` : 'Page Content: (not included)',
-            allowSession ? `Cookies: ${tabData.cookieHeader || '-'}` : 'Cookies: (not included)',
-            `Session Info: ${sessionStatus}`
-          ].join('\n'),
-          supplements: [
-            ...(includeTabContent ? [
-              { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
-              { type: 'json', label: 'Headings', value: tabData.headings },
-              { type: 'json', label: 'Meta', value: tabData.meta },
-              { type: 'json', label: 'Links', value: tabData.links }
-            ] : []),
-            ...(allowSession ? [
-              { type: 'json', label: 'Cookies By Domain', value: tabData.cookieHeadersByDomain || {} },
-              ...(includeStorageSnapshots ? [
-                { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
-                { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+      request = useSkillRunner
+        ? {
+          agent: 'You are a helpful AI assistant that analyzes web pages.',
+          name: 'PAGE_ANALYZER',
+          modelId: getSelectedModelId(),
+          params: [{ input: question }]
+        }
+        : {
+          agent: 'You are a helpful AI assistant that analyzes web pages using the provided text and screenshots.',
+          name: 'PAGE_ANALYZER',
+          modelId: getSelectedModelId(),
+          params: [{
+            input: question,
+            data: [
+              `Page Title: ${tabData.title}`,
+              `Page URL: ${tabData.url}`,
+              includeTabContent ? `Page Content: ${tabData.pageText || ''}` : 'Page Content: (not included)',
+              allowSession ? `Cookies: ${tabData.cookieHeader || '-'}` : 'Cookies: (not included)',
+              `Session Info: ${sessionStatus}`
+            ].join('\n'),
+            supplements: [
+              ...(includeTabContent ? [
+                { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
+                { type: 'json', label: 'Headings', value: tabData.headings },
+                { type: 'json', label: 'Meta', value: tabData.meta },
+                { type: 'json', label: 'Links', value: tabData.links }
+              ] : []),
+              ...(allowSession ? [
+                { type: 'json', label: 'Cookies By Domain', value: tabData.cookieHeadersByDomain || {} },
+                ...(includeStorageSnapshots ? [
+                  { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
+                  { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
+                ] : [])
               ] : [])
-            ] : [])
-          ]
-        }]
-      };
+            ]
+          }]
+        };
       source = {
         type: 'sidepanel-basic',
         url: tabData.url,
