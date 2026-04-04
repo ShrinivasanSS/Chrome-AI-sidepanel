@@ -38,7 +38,6 @@ Open the extension options page and configure:
 - `Theme Mode` (`Light` or `Dark`)
 - `Extension Mode` (`Developer` or `User`)
 - `Trusted Session Domains` (whitelist for forwarding cookies/session storage to runner)
-- `Runner Cookie Env Mapping` (`domain=ENV_VAR`, auto-default generated when omitted)
 - `API Base URL`
 - `API Key`
 - One or more model entries
@@ -216,12 +215,11 @@ For sidepanel Basic and Advanced modes:
   - optional context metadata
 - Skill launcher builds the final CLI prompt from `runnerInput` and injects session-aware usage guidance.
 - Runner process env includes:
-  - `SKILL_RUNNER_CONTEXT` (full JSON context)
-  - `SKILL_RUNNER_SESSION_INFO` (cookies + storage snapshot JSON for trusted domains)
-  - `SKILL_RUNNER_COOKIE_HEADER` (raw cookie header)
-  - `SKILL_RUNNER_COOKIES_JSON` (cookie list JSON)
-  - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN` (trusted-domain cookie headers map)
-  - Domain vars like `LOCALHOST_COOKIES` (from settings map/auto defaults)
+  - `SKILL_RUNNER_SESSION_INFO_JSON` (cookies + storage snapshot JSON for trusted domains)
+  - `SKILL_RUNNER_SESSION_ALLOWED` (`1` if session forwarding is allowed)
+  - `SKILL_RUNNER_ACTIVE_DOMAIN` (active tab hostname)
+  - `SKILL_RUNNER_COOKIES` (cookie header for active domain)
+  - `SKILL_RUNNER_REQUEST_HEADERS` (JSON request headers for active domain)
 - Local runner mode:
   - uses `chrome.runtime.sendNativeMessage(...)`
   - requires an installed Native Messaging host that launches the actual CLI binary

@@ -267,6 +267,28 @@ Status:
 - Implementation completed by AI on 22/Mar/2026.
 - Human validation pending.
 
+## Date - 23/Mar/2026
+
+### AI generated updates
+
+#### Proposed checklist - Simplified runner cookie/header env vars + active domain
+
+Requested change:
+- Ensure request headers are forwarded from the extension to the skill launcher.
+- Simplify env vars so only two are set for the active domain: `SKILL_RUNNER_COOKIES` and `SKILL_RUNNER_REQUEST_HEADERS`.
+- Provide the active domain separately so the launcher can choose the right domain values.
+- Update Python scripts to consume only the two env vars.
+
+Planned work items:
+- [ ] Update extension tab capture to include per-domain request header maps (generated in-extension) alongside cookie headers.
+- [ ] Simplify runner payload/session info to drop custom cookie env map usage and include active domain + request headers.
+- [ ] Update skill-launcher to set `SKILL_RUNNER_COOKIES` and `SKILL_RUNNER_REQUEST_HEADERS` for the active domain (with safe fallbacks) and remove per-domain env exports.
+- [ ] Update skill scripts (e.g., `site24x7_client.py`) to read only `SKILL_RUNNER_COOKIES` and `SKILL_RUNNER_REQUEST_HEADERS`.
+- [ ] Refresh documentation in `ai-sidepanel/README.md` and `skill-launcher/README.md`, and add findings to `Agent-Notes.md`.
+
+Status:
+- Planned; awaiting human review before implementation.
+
 #### Follow-up update - UI task/history split + formatted/raw views
 
 Requested change:

@@ -95,7 +95,7 @@ function handleStorageChanges(changes, areaName) {
     }
   }
 
-  if (changes.models || changes.defaultModelId || changes.apiUrl || changes.apiKey || changes.trustedSessionDomains || changes.runnerCookieEnvMap) {
+  if (changes.models || changes.defaultModelId || changes.apiUrl || changes.apiKey || changes.trustedSessionDomains) {
     StorageUtils.loadSettings().then((settings) => {
       currentSettings = settings;
       extensionMode = settings.extensionMode || 'developer';
@@ -234,6 +234,8 @@ async function handleRun() {
           cookieHeader: trustedActive ? (tabData.cookieHeader || '') : '',
           cookiesByDomain: tabData.cookiesByDomain || {},
           cookieHeadersByDomain: tabData.cookieHeadersByDomain || {},
+          requestHeadersByDomain: tabData.requestHeadersByDomain || {},
+          activeDomain: tabData.activeDomain || '',
           sessionStorageSnapshot: includeStorageSnapshots ? (tabData.sessionStorageSnapshot || {}) : {},
           localStorageSnapshot: includeStorageSnapshots ? (tabData.localStorageSnapshot || {}) : {}
         } : {}),
@@ -352,6 +354,8 @@ async function handleCapture() {
           cookieHeader: trustedActive ? (tabData.cookieHeader || '') : '',
           cookiesByDomain: tabData.cookiesByDomain || {},
           cookieHeadersByDomain: tabData.cookieHeadersByDomain || {},
+          requestHeadersByDomain: tabData.requestHeadersByDomain || {},
+          activeDomain: tabData.activeDomain || '',
           sessionStorageSnapshot: includeStorageSnapshots ? (tabData.sessionStorageSnapshot || {}) : {},
           localStorageSnapshot: includeStorageSnapshots ? (tabData.localStorageSnapshot || {}) : {}
         } : {}),

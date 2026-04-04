@@ -257,8 +257,7 @@ async function processRequestLifecycle(options) {
           model: model.value,
           requestName: normalized.name,
           selectedSkills: skillContext.selectedSkills,
-          skillsConfig: settings.skillsConfig || null,
-          runnerCookieEnvMap: settings.runnerCookieEnvMap || {}
+          skillsConfig: settings.skillsConfig || null
         })
         : await callAi(settings, model, skillContext.agentPrompt, task);
       responses.push({
@@ -625,8 +624,7 @@ async function executeRunnerJob(jobId) {
         model: starting.model,
         requestName: starting.requestName,
         selectedSkills: starting.selectedSkills,
-        skillsConfig: settings.skillsConfig || null,
-        runnerCookieEnvMap: settings.runnerCookieEnvMap || {}
+        skillsConfig: settings.skillsConfig || null
       });
 
       responses.push({
@@ -742,9 +740,10 @@ function buildRunnerInput(agentPrompt, task, context) {
   const cookieHeadersByDomain = source.cookieHeadersByDomain && typeof source.cookieHeadersByDomain === 'object'
     ? source.cookieHeadersByDomain
     : {};
-  const cookieEnvMap = safeContext.runnerCookieEnvMap && typeof safeContext.runnerCookieEnvMap === 'object'
-    ? safeContext.runnerCookieEnvMap
+  const requestHeadersByDomain = source.requestHeadersByDomain && typeof source.requestHeadersByDomain === 'object'
+    ? source.requestHeadersByDomain
     : {};
+  const activeDomain = typeof source.activeDomain === 'string' ? source.activeDomain : '';
   const taskImages = Array.isArray(task && task.images) ? task.images : [];
 
   return {
@@ -782,7 +781,8 @@ function buildRunnerInput(agentPrompt, task, context) {
       cookieHeader: source.cookieHeader || '',
       cookiesByDomain,
       cookieHeadersByDomain,
-      cookieEnvMap,
+      requestHeadersByDomain,
+      activeDomain,
       sessionInfoAllowed: !!source.sessionInfoAllowed
     }
   };
@@ -1112,28 +1112,48 @@ function normalizeCookieDomain(domain) {
     .replace(/:\d+$/, '');
 }
 
+function buildDefaultRequestHeaders() {
+  const fallbackAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
+  const userAgent = (self.navigator && self.navigator.userAgent) ? self.navigator.userAgent : fallbackAgent;
+  const language = (self.navigator && self.navigator.language) ? self.navigator.language : 'en-GB';
+  const baseLanguage = language.split('-')[0] || 'en';
+  return {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': `${language},${baseLanguage};q=0.9`,
+    'User-Agent': userAgent,
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none'
+  };
+}
+
 async function collectTrustedDomainCookies(trustedDomains) {
   const domains = Array.isArray(trustedDomains)
     ? trustedDomains.map((entry) => normalizeCookieDomain(entry)).filter(Boolean)
     : [];
   const cookiesByDomain = {};
   const cookieHeadersByDomain = {};
+  const requestHeadersByDomain = {};
+  const defaultHeaders = buildDefaultRequestHeaders();
 
   for (const domain of domains) {
     try {
       const cookies = await chrome.cookies.getAll({ domain });
       cookiesByDomain[domain] = cookies;
       cookieHeadersByDomain[domain] = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+      requestHeadersByDomain[domain] = { ...defaultHeaders };
     } catch (error) {
       console.warn('[Service Worker] Unable to read trusted-domain cookies:', domain, error);
       cookiesByDomain[domain] = [];
       cookieHeadersByDomain[domain] = '';
+      requestHeadersByDomain[domain] = { ...defaultHeaders };
     }
   }
 
   return {
     cookiesByDomain,
-    cookieHeadersByDomain
+    cookieHeadersByDomain,
+    requestHeadersByDomain
   };
 }
 
@@ -1163,6 +1183,7 @@ async function handleTabCapture(request, sendResponse) {
     }
 
     const trustedCookies = await collectTrustedDomainCookies(request && request.trustedDomains);
+    const activeDomain = tab.url ? normalizeCookieDomain(tab.url) : '';
 
     sendResponse({
       success: true,
@@ -1179,7 +1200,9 @@ async function handleTabCapture(request, sendResponse) {
         cookies,
         cookieHeader,
         cookiesByDomain: trustedCookies.cookiesByDomain,
-        cookieHeadersByDomain: trustedCookies.cookieHeadersByDomain
+        cookieHeadersByDomain: trustedCookies.cookieHeadersByDomain,
+        requestHeadersByDomain: trustedCookies.requestHeadersByDomain,
+        activeDomain
       }
     });
   } catch (error) {

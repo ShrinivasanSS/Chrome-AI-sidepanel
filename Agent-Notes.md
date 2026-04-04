@@ -89,3 +89,9 @@ Use this section for reducing repeated searches.
 - **Python scripts derive domain from env chain.** `site24x7_client.py` now checks `SITE24X7_DOMAIN` → `SKILL_RUNNER_SOURCE_ORIGIN` → `SKILL_RUNNER_SOURCE_URL` in priority order. No manual config needed when running from the extension.
 - **Claude prompt includes curl guidance.** The prompt tells the runner to `echo $SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN` before making curl requests. This way Claude can generate proper authenticated curl commands even without skill Python scripts.
 - **The prompt now includes the active tab origin** so the runner knows which domain it's working with and can construct proper API URLs.
+
+## March 23 2026
+
+- Simplified runner env vars: launcher now exports only `SKILL_RUNNER_COOKIES` + `SKILL_RUNNER_REQUEST_HEADERS` for the active domain (plus `SKILL_RUNNER_ACTIVE_DOMAIN` as metadata). This avoids per-domain env names and removes the need for `runnerCookieEnvMap` in settings/UI.
+- Extension now generates request header maps in the service worker and forwards them alongside cookie headers in runner payloads.
+- `site24x7_client.py` was updated to read only the two simplified env vars and no longer parses per-domain env names.

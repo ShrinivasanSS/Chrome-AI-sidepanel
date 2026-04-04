@@ -35,7 +35,6 @@ const runnerNativeHostNameEl = document.getElementById('runnerNativeHostName');
 const runnerTimeoutMsEl = document.getElementById('runnerTimeoutMs');
 const themeModeEl = document.getElementById('themeMode');
 const trustedSessionDomainsEl = document.getElementById('trustedSessionDomains');
-const runnerCookieEnvMapEl = document.getElementById('runnerCookieEnvMap');
 
 const storageTotalEl = document.getElementById('storageTotal');
 const storageHistoryEl = document.getElementById('storageHistory');
@@ -69,7 +68,6 @@ async function initializeSettingsPage() {
   runnerRemoteUrlEl.addEventListener('input', updateExample);
   runnerNativeHostNameEl.addEventListener('input', updateExample);
   trustedSessionDomainsEl.addEventListener('input', updateExample);
-  runnerCookieEnvMapEl.addEventListener('input', updateExample);
   runnerModeEl.addEventListener('change', updateRunnerFieldVisibility);
   processingTargetEl.addEventListener('change', updateRunnerFieldVisibility);
 
@@ -90,7 +88,6 @@ function renderSettings(settings) {
   trustedSessionDomainsEl.value = Array.isArray(settings.trustedSessionDomains)
     ? settings.trustedSessionDomains.join('\n')
     : '';
-  runnerCookieEnvMapEl.value = formatCookieEnvMap(settings.runnerCookieEnvMap, settings.trustedSessionDomains);
 
   modelsContainerEl.innerHTML = '';
   settings.models.forEach((model) => renderModelRow(model));
@@ -211,49 +208,6 @@ function collectTrustedDomains() {
     .filter(Boolean);
 }
 
-function parseCookieEnvMap() {
-  const output = {};
-  runnerCookieEnvMapEl.value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .forEach((line) => {
-      const index = line.indexOf('=');
-      if (index <= 0) {
-        return;
-      }
-      const domain = line.slice(0, index).trim().toLowerCase();
-      const envName = line.slice(index + 1).trim();
-      if (!domain || !envName) {
-        return;
-      }
-      output[domain] = envName;
-    });
-  return output;
-}
-
-function formatCookieEnvMap(map, trustedDomains) {
-  const trusted = Array.isArray(trustedDomains) ? trustedDomains : [];
-  const source = map && typeof map === 'object' ? map : {};
-  const lines = [];
-  trusted.forEach((domain) => {
-    const key = String(domain || '').trim().toLowerCase();
-    if (!key) {
-      return;
-    }
-    const envName = source[key] || StorageUtils.defaultCookieEnvName(key);
-    lines.push(`${key}=${envName}`);
-  });
-  Object.keys(source).forEach((domain) => {
-    const key = String(domain || '').trim().toLowerCase();
-    if (!key || trusted.includes(key)) {
-      return;
-    }
-    lines.push(`${key}=${source[key]}`);
-  });
-  return lines.join('\n');
-}
-
 async function handleSave(event) {
   event.preventDefault();
 
@@ -269,7 +223,6 @@ async function handleSave(event) {
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
     theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
     trustedSessionDomains: collectTrustedDomains(),
-    runnerCookieEnvMap: parseCookieEnvMap(),
     models,
     defaultModelId: defaultModelIdEl.value,
     skillsConfig: collectSkillsConfig(),
@@ -309,7 +262,6 @@ async function handleTest() {
       extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
       theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
       trustedSessionDomains: collectTrustedDomains(),
-      runnerCookieEnvMap: parseCookieEnvMap(),
       models: collectModels(),
       defaultModelId: defaultModelIdEl.value,
       skillsConfig: collectSkillsConfig(),
@@ -517,7 +469,6 @@ function updateExample() {
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
     theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
     trustedSessionDomains: collectTrustedDomains(),
-    runnerCookieEnvMap: parseCookieEnvMap(),
     models: collectModels(),
     defaultModelId: defaultModelIdEl.value,
     skillsConfig: collectSkillsConfig(),
@@ -553,8 +504,7 @@ function updateExample() {
           userMessage: 'Analyze current page task',
           sessionInfo: {
             cookieHeadersByDomain: settings.trustedSessionDomains.reduce((acc, domain) => {
-              const envName = settings.runnerCookieEnvMap[domain];
-              acc[domain] = `<forwarded via ${envName}>`;
+              acc[domain] = '<forwarded cookie header>';
               return acc;
             }, {})
           }

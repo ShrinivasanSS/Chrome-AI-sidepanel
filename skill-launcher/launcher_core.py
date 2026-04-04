@@ -47,17 +47,6 @@ def _default_cookie_env_name(domain: str) -> str:
     return f"{base}_COOKIES"
 
 
-def _normalize_env_name(value: object, fallback: str) -> str:
-    name = _normalize_text(value).upper()
-    name = re.sub(r"[^A-Z0-9_]", "_", name)
-    name = re.sub(r"_+", "_", name).strip("_")
-    if not name:
-        name = fallback
-    if re.match(r"^[0-9]", name):
-        name = f"COOKIES_{name}"
-    return name
-
-
 def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)
 
@@ -286,31 +275,9 @@ class SkillLauncher:
         # Export structured data as env vars (keeps prompt small)
         self._export_structured_env(env, runner_input, context)
 
-        # Export cookie/session env vars
+        # Export cookie/request header env vars for the active domain
         session_info = self._build_session_info(runner_input, context)
-        cookies = session_info.get("cookies")
-        if not isinstance(cookies, list):
-            cookies = []
-            session_info["cookies"] = cookies
-        env["SKILL_RUNNER_COOKIES_JSON"] = _json_dumps(cookies)
-
-        # Set SKILL_RUNNER_COOKIE_HEADER (active-tab cookie header for legacy/compat)
-        cookie_header = _normalize_text(session_info.get("cookieHeader"))
-        if cookie_header:
-            env["SKILL_RUNNER_COOKIE_HEADER"] = cookie_header
-
-        self._export_domain_cookie_envs(env, session_info)
-
-        # Export standard request headers for curl/python usage
-        request_headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-GB,en;q=0.5",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-        }
-        env["SKILL_RUNNER_REQUEST_HEADERS_JSON"] = _json_dumps(request_headers)
+        self._export_active_domain_envs(env, session_info)
 
         log_env = {
             key: env.get(key, "")
@@ -319,9 +286,9 @@ class SkillLauncher:
                 "SKILL_RUNNER_SKILLS_DIR",
                 "SKILL_RUNNER_WORKDIR",
                 "AGENT_SHARED_PATH",
-                "SKILL_RUNNER_COOKIE_HEADER",
-                "SKILL_RUNNER_COOKIES_JSON",
-                "SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN",
+                "SKILL_RUNNER_ACTIVE_DOMAIN",
+                "SKILL_RUNNER_COOKIES",
+                "SKILL_RUNNER_REQUEST_HEADERS",
                 "SKILL_RUNNER_SESSION_ALLOWED",
             )
         }
@@ -453,49 +420,57 @@ class SkillLauncher:
             payload["result"] = task.get("result")
         return payload
 
-    def _export_domain_cookie_envs(self, env: Dict[str, str], session_info: Dict):
+    def _export_active_domain_envs(self, env: Dict[str, str], session_info: Dict):
+        """Export cookie/header env vars for the active domain only.
+
+        Sets:
+        - SKILL_RUNNER_ACTIVE_DOMAIN
+        - SKILL_RUNNER_COOKIES (cookie header string)
+        - SKILL_RUNNER_REQUEST_HEADERS (JSON headers)
+        """
         headers_by_domain = session_info.get("cookieHeadersByDomain")
         if not isinstance(headers_by_domain, dict):
             headers_by_domain = {}
-        cookies_by_domain = session_info.get("cookiesByDomain")
-        if not isinstance(cookies_by_domain, dict):
-            cookies_by_domain = {}
-        cookie_env_map = session_info.get("cookieEnvMap")
-        if not isinstance(cookie_env_map, dict):
-            cookie_env_map = {}
+        request_headers_by_domain = session_info.get("requestHeadersByDomain")
+        if not isinstance(request_headers_by_domain, dict):
+            request_headers_by_domain = {}
 
-        normalized_env_map = {
-            _normalize_cookie_domain(key): _normalize_env_name(value, _default_cookie_env_name(_normalize_cookie_domain(key)))
-            for key, value in cookie_env_map.items()
-            if _normalize_cookie_domain(key)
-        }
+        active_domain = _normalize_cookie_domain(session_info.get("activeDomain") or session_info.get("url"))
+        if not active_domain and len(headers_by_domain) == 1:
+            only_domain = next(iter(headers_by_domain.keys()))
+            active_domain = _normalize_cookie_domain(only_domain)
+        if active_domain:
+            env["SKILL_RUNNER_ACTIVE_DOMAIN"] = active_domain
 
-        normalized_headers = {}
-        normalized_cookies = {}
-        for domain, value in headers_by_domain.items():
-            key = _normalize_cookie_domain(domain)
-            if not key:
-                continue
-            normalized_headers[key] = _normalize_text(value)
-        for domain, value in cookies_by_domain.items():
-            key = _normalize_cookie_domain(domain)
-            if not key:
-                continue
-            normalized_cookies[key] = value if isinstance(value, list) else []
+        cookie_header = ""
+        if headers_by_domain:
+            for domain, value in headers_by_domain.items():
+                if _normalize_cookie_domain(domain) == active_domain:
+                    cookie_header = _normalize_text(value)
+                    break
+        if not cookie_header:
+            cookie_header = _normalize_text(session_info.get("cookieHeader"))
+        if cookie_header:
+            env["SKILL_RUNNER_COOKIES"] = cookie_header
 
-        for domain, header in normalized_headers.items():
-            fallback = _default_cookie_env_name(domain)
-            env_name = normalized_env_map.get(domain) or _normalize_env_name(None, fallback)
-            env_payload = {
-                "domain": domain,
-                "cookieHeader": header,
-                "cookies": normalized_cookies.get(domain, []),
+        request_headers = {}
+        if request_headers_by_domain:
+            for domain, value in request_headers_by_domain.items():
+                if _normalize_cookie_domain(domain) == active_domain and isinstance(value, dict):
+                    request_headers = value
+                    break
+
+        if not request_headers:
+            request_headers = {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-GB,en;q=0.5",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
             }
-            env[env_name] = _json_dumps(env_payload)
-            env[f"{env_name}_JSON"] = _json_dumps(normalized_cookies.get(domain, []))
 
-        env["SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN"] = _json_dumps(normalized_headers)
-        env["SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON"] = _json_dumps(normalized_cookies)
+        env["SKILL_RUNNER_REQUEST_HEADERS"] = _json_dumps(request_headers)
 
     def _export_structured_env(self, env: Dict[str, str], runner_input: Dict, context: Dict):
         """Export bulk structured data as env vars so the CLI prompt stays small."""
@@ -579,22 +554,29 @@ class SkillLauncher:
                 "cookieHeader": source.get("cookieHeader", ""),
                 "cookiesByDomain": source.get("cookiesByDomain", {}),
                 "cookieHeadersByDomain": source.get("cookieHeadersByDomain", {}),
+                "requestHeadersByDomain": source.get("requestHeadersByDomain", {}),
                 "sessionStorageSnapshot": source.get("sessionStorageSnapshot", {}),
                 "localStorageSnapshot": source.get("localStorageSnapshot", {}),
                 "sessionInfoAllowed": source.get("sessionInfoAllowed", False),
-                "cookieEnvMap": context.get("runnerCookieEnvMap", {}),
+                "activeDomain": source.get("activeDomain", ""),
             }
 
         session_info["url"] = session_info.get("url") or source.get("url")
         session_info["title"] = session_info.get("title") or source.get("title")
+        if "requestHeadersByDomain" not in session_info:
+            session_info["requestHeadersByDomain"] = source.get("requestHeadersByDomain", {})
+        if "activeDomain" not in session_info:
+            session_info["activeDomain"] = source.get("activeDomain", "")
         if not isinstance(session_info.get("cookies"), list):
             session_info["cookies"] = []
         if not isinstance(session_info.get("cookiesByDomain"), dict):
             session_info["cookiesByDomain"] = {}
         if not isinstance(session_info.get("cookieHeadersByDomain"), dict):
             session_info["cookieHeadersByDomain"] = {}
-        if not isinstance(session_info.get("cookieEnvMap"), dict):
-            session_info["cookieEnvMap"] = context.get("runnerCookieEnvMap", {}) if isinstance(context, dict) else {}
+        if not isinstance(session_info.get("requestHeadersByDomain"), dict):
+            session_info["requestHeadersByDomain"] = {}
+        if not isinstance(session_info.get("activeDomain"), str):
+            session_info["activeDomain"] = ""
         if not isinstance(session_info.get("sessionStorageSnapshot"), dict):
             session_info["sessionStorageSnapshot"] = {}
         if not isinstance(session_info.get("localStorageSnapshot"), dict):
@@ -656,8 +638,8 @@ class SkillLauncher:
             target = source_origin or source_url
             sections.append("")
             sections.append("For authenticated HTTP requests, use env vars directly (never type out values):")
-            sections.append(f"  curl -b \"$SKILL_RUNNER_COOKIE_HEADER\" -H \"Accept: ${{ACCEPT}}\" {target}/api/endpoint")
-            sections.append("Request headers are in $SKILL_RUNNER_REQUEST_HEADERS_JSON (JSON object).")
+            sections.append(f"  curl -b \"$SKILL_RUNNER_COOKIES\" {target}/api/endpoint")
+            sections.append("Request headers are in $SKILL_RUNNER_REQUEST_HEADERS (JSON object).")
             sections.append("Scripts in skills/ handle cookies and headers from env vars automatically.")
             sections.append("")
 

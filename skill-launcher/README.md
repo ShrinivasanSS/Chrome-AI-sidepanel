@@ -29,11 +29,9 @@ It supports two interfaces:
 - Shared libraries are extracted to `<runner>/shared/` and exposed via `AGENT_SHARED_PATH` env var
 - Sets environment variables for runner process (all bulk data is in env, prompt stays small):
   - `AGENT_SHARED_PATH` — path to shared Python libraries used by skill scripts
-  - `SKILL_RUNNER_COOKIE_HEADER` — active-tab cookie header string
-  - `SKILL_RUNNER_COOKIES_JSON` — active-tab cookie array
-  - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN` — JSON `{domain: cookieHeader}`
-  - `SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON` — JSON `{domain: [cookies]}`
-  - `<DOMAIN>_COOKIES` / `<DOMAIN>_COOKIES_JSON` — per-domain cookie data
+  - `SKILL_RUNNER_ACTIVE_DOMAIN` — active tab hostname
+  - `SKILL_RUNNER_COOKIES` — cookie header string for the active domain
+  - `SKILL_RUNNER_REQUEST_HEADERS` — JSON request headers for the active domain
   - `SKILL_RUNNER_AGENT_INSTRUCTIONS` — full agent/system prompt instructions
   - `SKILL_RUNNER_PAGE_CONTENT_JSON` — page text, headings, meta, links
   - `SKILL_RUNNER_ACTIVE_TAB_JSON` — active tab URL, title, meta
