@@ -111,6 +111,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.command === 'chat-message') {
+    handleChatMessage(request, sendResponse);
+    return true;
+  }
+
   if (request.command === 'settings-updated') {
     SkillsManager.scheduleRefreshAlarm().then(() =>
       SkillsManager.refreshSkills({ reason: 'settings-updated' })
@@ -165,6 +170,99 @@ async function handleManualRequest(request, sendResponse) {
     console.error('[Service Worker] Manual request failed:', error);
     sendResponse({ success: false, error: error.message });
   }
+}
+
+async function handleChatMessage(request, sendResponse) {
+  try {
+    const settings = await StorageUtils.loadSettings();
+    const chatMode = request.chatMode || 'chat';
+    const modelId = request.modelId || null;
+    const model = StorageUtils.resolveModel(settings, modelId);
+    const useSkillRunner = settings.runnerConfig && settings.runnerConfig.processingTarget === 'skill-runner';
+
+    if (chatMode === 'skill') {
+      // Skill mode: send concatenated context as a single task through the existing process-request path
+      const contextString = request.contextString || '';
+      const rawRequest = {
+        agent: 'You are a helpful AI assistant.',
+        name: 'CHAT_SKILL',
+        modelId: model.id,
+        params: [{ input: contextString }]
+      };
+
+      if (useSkillRunner) {
+        const queued = await enqueueSkillRunnerRequest({
+          rawRequest,
+          mode: 'basic',
+          source: request.source || { type: 'sidepanel-chat-skill' },
+          sourceTabId: null,
+          settings
+        });
+        sendResponse({
+          success: true,
+          accepted: true,
+          jobId: queued.job.id,
+          job: queued.job
+        });
+        startRunnerQueueProcessing();
+      } else {
+        const result = await processRequestLifecycle({
+          rawRequest,
+          mode: 'basic',
+          source: request.source || { type: 'sidepanel-chat-skill' },
+          settings
+        });
+        const firstResponse = result.output && result.output.response && result.output.response[0];
+        sendResponse({
+          success: true,
+          reply: firstResponse ? firstResponse.response : '',
+          output: result.output
+        });
+      }
+    } else {
+      // Chat mode: send full messages array to OpenAI-compatible API
+      const messages = request.messages || [];
+      if (messages.length === 0) {
+        throw new Error('No messages provided');
+      }
+      const reply = await callAiWithMessages(settings, model, messages);
+      sendResponse({
+        success: true,
+        reply
+      });
+    }
+  } catch (error) {
+    console.error('[Service Worker] Chat message failed:', error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
+
+async function callAiWithMessages(settings, model, messages) {
+  const requestBody = {
+    model: model.value,
+    messages
+  };
+
+  const response = await fetch(`${settings.apiUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.apiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API call failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+    throw new Error('Invalid API response format');
+  }
+
+  return data.choices[0].message.content;
 }
 
 async function handleApiRequest(request, sender, sendResponse) {

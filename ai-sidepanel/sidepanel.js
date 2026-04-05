@@ -24,10 +24,6 @@ const apiModeBtn = document.getElementById('apiModeBtn');
 const basicMode = document.getElementById('basicMode');
 const advancedMode = document.getElementById('advancedMode');
 const apiMode = document.getElementById('apiMode');
-const basicQuestion = document.getElementById('basicQuestion');
-const captureBtn = document.getElementById('captureBtn');
-const basicStatus = document.getElementById('basicStatus');
-const basicOutput = document.getElementById('basicOutput');
 
 const apiSource = document.getElementById('apiSource');
 const apiAgent = document.getElementById('apiAgent');
@@ -35,6 +31,14 @@ const apiName = document.getElementById('apiName');
 const apiModel = document.getElementById('apiModel');
 const apiStatus = document.getElementById('apiStatus');
 const apiOutput = document.getElementById('apiOutput');
+
+// Chat elements
+const chatModeBtn = document.getElementById('chatModeBtn');
+const skillModeBtn = document.getElementById('skillModeBtn');
+const newChatBtn = document.getElementById('newChatBtn');
+const chatMessagesEl = document.getElementById('chatMessages');
+const chatInput = document.getElementById('chatInput');
+const chatSendBtn = document.getElementById('chatSendBtn');
 
 let currentOutput = null;
 let currentMode = 'basic';
@@ -51,6 +55,12 @@ const expandedTaskIds = new Set();
 const expandedHistoryIds = new Set();
 let taskResultViewMode = {};  // jobId -> 'markdown' | 'raw'
 
+// Chat state
+let chatMode = 'chat'; // 'chat' or 'skill'
+let chatMessages = []; // Array of { role: 'user'|'assistant'|'system', content: string }
+let chatBusy = false;
+let pendingSkillJobId = null;
+
 document.addEventListener('DOMContentLoaded', initializeSidepanel);
 
 async function initializeSidepanel() {
@@ -64,9 +74,16 @@ async function initializeSidepanel() {
   basicModeBtn.addEventListener('click', () => switchMode('basic'));
   advancedModeBtn.addEventListener('click', () => switchMode('advanced'));
   apiModeBtn.addEventListener('click', () => switchMode('api'));
-  captureBtn.addEventListener('click', handleCapture);
   includeTabContentToggle.addEventListener('change', handleIncludeTabToggleChange);
   includeSessionInfoToggle.addEventListener('change', handleIncludeSessionToggleChange);
+
+  // Chat event listeners
+  chatModeBtn.addEventListener('click', () => switchChatMode('chat'));
+  skillModeBtn.addEventListener('click', () => switchChatMode('skill'));
+  newChatBtn.addEventListener('click', handleNewChat);
+  chatSendBtn.addEventListener('click', handleChatSend);
+  chatInput.addEventListener('keydown', handleChatKeydown);
+  chatInput.addEventListener('input', autoResizeChatInput);
 
   chrome.storage.local.onChanged.addListener(handleStorageChanges);
 
@@ -76,6 +93,7 @@ async function initializeSidepanel() {
   applyExtensionMode(extensionMode);
   renderModelOptions(currentSettings);
   await loadContextPreferences();
+  await loadChatMode();
   await loadMode();
   await loadApiSession();
   switchActivityView('tasks');
@@ -269,138 +287,6 @@ async function handleRun() {
     showStatus(statusEl, `Error: ${error.message}`, 'error');
   } finally {
     runBtn.disabled = false;
-  }
-}
-
-async function handleCapture() {
-  try {
-    const question = basicQuestion.value.trim();
-    if (!question) {
-      throw new Error('Please enter a question first');
-    }
-
-    captureBtn.disabled = true;
-    let request = null;
-    let source = {
-      type: 'sidepanel-basic'
-    };
-
-    const useSkillRunner = currentSettings
-      && currentSettings.runnerConfig
-      && currentSettings.runnerConfig.processingTarget === 'skill-runner';
-    if (includeTabContent || includeSessionInfo) {
-      showStatus(basicStatus, 'Capturing current tab...', 'loading');
-      const trustedDomains = (currentSettings && currentSettings.trustedSessionDomains) || [];
-      const tabData = await captureCurrentTab({ trustedDomains });
-      const trustedActive = isTrustedDomain(tabData.url, trustedDomains);
-      const allowSession = includeSessionInfo && trustedDomains.length > 0;
-      const includeStorageSnapshots = allowSession && trustedActive;
-      const sessionStatus = !allowSession
-        ? 'Session info disabled.'
-        : includeStorageSnapshots
-          ? 'Trusted cookies + active-tab storage included.'
-          : 'Trusted-domain cookies included (active-tab storage skipped; tab domain not trusted).';
-      request = useSkillRunner
-        ? {
-          agent: 'You are a helpful AI assistant that analyzes web pages.',
-          name: 'PAGE_ANALYZER',
-          modelId: getSelectedModelId(),
-          params: [{ input: question }]
-        }
-        : {
-          agent: 'You are a helpful AI assistant that analyzes web pages using the provided text and screenshots.',
-          name: 'PAGE_ANALYZER',
-          modelId: getSelectedModelId(),
-          params: [{
-            input: question,
-            data: [
-              `Page Title: ${tabData.title}`,
-              `Page URL: ${tabData.url}`,
-              includeTabContent ? `Page Content: ${tabData.pageText || ''}` : 'Page Content: (not included)',
-              allowSession ? `Cookies: ${tabData.cookieHeader || '-'}` : 'Cookies: (not included)',
-              `Session Info: ${sessionStatus}`
-            ].join('\n'),
-            supplements: [
-              ...(includeTabContent ? [
-                { type: 'screenshot', data: tabData.screenshot, fileName: 'captured-tab.png' },
-                { type: 'json', label: 'Headings', value: tabData.headings },
-                { type: 'json', label: 'Meta', value: tabData.meta },
-                { type: 'json', label: 'Links', value: tabData.links }
-              ] : []),
-              ...(allowSession ? [
-                { type: 'json', label: 'Cookies By Domain', value: tabData.cookieHeadersByDomain || {} },
-                ...(includeStorageSnapshots ? [
-                  { type: 'json', label: 'Session Storage', value: tabData.sessionStorageSnapshot || {} },
-                  { type: 'json', label: 'Local Storage', value: tabData.localStorageSnapshot || {} }
-                ] : [])
-              ] : [])
-            ]
-          }]
-        };
-      source = {
-        type: 'sidepanel-basic',
-        url: tabData.url,
-        title: tabData.title,
-        ...(includeTabContent ? {
-          pageText: tabData.pageText || '',
-          headings: tabData.headings || [],
-          meta: tabData.meta || {},
-          links: tabData.links || []
-        } : {}),
-        ...(allowSession ? {
-          cookies: trustedActive ? (tabData.cookies || []) : [],
-          cookieHeader: trustedActive ? (tabData.cookieHeader || '') : '',
-          cookiesByDomain: tabData.cookiesByDomain || {},
-          cookieHeadersByDomain: tabData.cookieHeadersByDomain || {},
-          sessionStorageSnapshot: includeStorageSnapshots ? (tabData.sessionStorageSnapshot || {}) : {},
-          localStorageSnapshot: includeStorageSnapshots ? (tabData.localStorageSnapshot || {}) : {}
-        } : {}),
-        sessionInfoAllowed: allowSession
-      };
-      showStatus(
-        basicStatus,
-        allowSession
-          ? 'Sending prompt with selected page/session context...'
-          : 'Sending prompt (session info skipped for untrusted domain or disabled)...',
-        'loading'
-      );
-    } else {
-      request = {
-        agent: 'You are a helpful AI assistant.',
-        name: 'CHAT_QUERY',
-        modelId: getSelectedModelId(),
-        params: [{
-          input: question
-        }]
-      };
-      showStatus(basicStatus, 'Sending prompt without active tab context...', 'loading');
-    }
-
-    const response = await sendRuntimeMessage({
-      command: 'process-request',
-      mode: 'basic',
-      source,
-      data: request
-    });
-
-    if (!response.success) {
-      throw new Error(response.error);
-    }
-
-    if (response.accepted && response.jobId) {
-      activeJobByMode.basic = response.jobId;
-      showStatus(basicStatus, `Queued runner job ${response.jobId}. Waiting for execution...`, 'loading');
-      await refreshRunnerJobs();
-    } else {
-      displayResponseCards(basicOutput, response.output.response, true);
-      showStatus(basicStatus, 'Analysis complete.', 'success');
-      await renderHistory();
-    }
-  } catch (error) {
-    console.error('[Sidepanel] Capture failed:', error);
-    showStatus(basicStatus, `Error: ${error.message}`, 'error');
-  } finally {
-    captureBtn.disabled = false;
   }
 }
 
@@ -625,61 +511,54 @@ function buildJobTimerText(job) {
 }
 
 function syncTrackedJobStatuses() {
-  ['basic', 'advanced'].forEach((mode) => {
-    const jobId = activeJobByMode[mode];
-    if (!jobId) {
-      return;
-    }
+  // Only track advanced mode jobs here; basic/chat mode jobs are handled by awaitSkillJobResult
+  const advancedJobId = activeJobByMode.advanced;
+  if (!advancedJobId) {
+    return;
+  }
 
-    const job = currentRunnerJobs.find((entry) => entry.id === jobId);
-    if (!job) {
-      return;
-    }
+  const job = currentRunnerJobs.find((entry) => entry.id === advancedJobId);
+  if (!job) {
+    return;
+  }
 
-    const isBasic = mode === 'basic';
-    const statusNode = isBasic ? basicStatus : statusEl;
-    if (job.status === 'queued') {
-      const queueSuffix = job.queuePosition ? ` (queue ${job.queuePosition})` : '';
-      showStatus(statusNode, `Queued${queueSuffix}. Waiting ${buildJobTimerText(job)}.`, 'loading');
-      return;
-    }
+  if (job.status === 'queued') {
+    const queueSuffix = job.queuePosition ? ` (queue ${job.queuePosition})` : '';
+    showStatus(statusEl, `Queued${queueSuffix}. Waiting ${buildJobTimerText(job)}.`, 'loading');
+    return;
+  }
 
-    if (job.status === 'running') {
-      const progress = job.progress || {};
-      showStatus(
-        statusNode,
-        `Running ${progress.completed || 0}/${progress.total || 0}. ${buildJobTimerText(job)}`,
-        'loading'
-      );
-      return;
-    }
+  if (job.status === 'running') {
+    const progress = job.progress || {};
+    showStatus(
+      statusEl,
+      `Running ${progress.completed || 0}/${progress.total || 0}. ${buildJobTimerText(job)}`,
+      'loading'
+    );
+    return;
+  }
 
-    if (deliveredJobResults.has(job.id)) {
-      return;
-    }
+  if (deliveredJobResults.has(job.id)) {
+    return;
+  }
 
-    deliveredJobResults.add(job.id);
-    const output = job.output || { response: job.responses || [] };
-    if (isBasic) {
-      displayResponseCards(basicOutput, output.response || [], true);
-    } else {
-      displayOutput(output);
-    }
+  deliveredJobResults.add(job.id);
+  const output = job.output || { response: job.responses || [] };
+  displayOutput(output);
 
-    if (job.status === 'completed') {
-      showStatus(statusNode, `Runner job completed (${(output.response || []).length} task result(s)). See History tab.`, 'success');
-    } else if (job.status === 'timed_out') {
-      showStatus(statusNode, `Runner job timed out. See History tab.`, 'error');
-    } else {
-      showStatus(statusNode, `Runner job finished with errors. See History tab.`, 'error');
-    }
+  if (job.status === 'completed') {
+    showStatus(statusEl, `Runner job completed (${(output.response || []).length} task result(s)). See History tab.`, 'success');
+  } else if (job.status === 'timed_out') {
+    showStatus(statusEl, `Runner job timed out. See History tab.`, 'error');
+  } else {
+    showStatus(statusEl, `Runner job finished with errors. See History tab.`, 'error');
+  }
 
-    // Auto-expand completed job in history and switch to history view
-    expandedHistoryIds.add(job.id);
-    taskResultViewMode[job.id] = 'markdown';
-    switchActivityView('history');
-    renderHistory();
-  });
+  // Auto-expand completed job in history and switch to history view
+  expandedHistoryIds.add(job.id);
+  taskResultViewMode[job.id] = 'markdown';
+  switchActivityView('history');
+  renderHistory();
 }
 
 function formatDuration(ms) {
@@ -951,4 +830,322 @@ function captureCurrentTab(options) {
       resolve(response.data);
     });
   });
+}
+
+// ─── Chat Mode Logic ────────────────────────────────────────────────────────
+
+async function loadChatMode() {
+  const result = await chrome.storage.local.get(['chatMode']);
+  const stored = result.chatMode;
+  chatMode = (stored === 'skill') ? 'skill' : (StorageUtils.DEFAULT_CHAT_MODE || 'chat');
+  applyChatModeToggle();
+}
+
+async function switchChatMode(mode) {
+  chatMode = mode === 'skill' ? 'skill' : 'chat';
+  await chrome.storage.local.set({ chatMode });
+  applyChatModeToggle();
+}
+
+function applyChatModeToggle() {
+  chatModeBtn.classList.toggle('active', chatMode === 'chat');
+  skillModeBtn.classList.toggle('active', chatMode === 'skill');
+}
+
+function handleNewChat() {
+  chatMessages = [];
+  pendingSkillJobId = null;
+  chatBusy = false;
+  chatSendBtn.disabled = false;
+  chatInput.value = '';
+  renderChatMessages();
+}
+
+function handleChatKeydown(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    handleChatSend();
+  }
+}
+
+function autoResizeChatInput() {
+  chatInput.style.height = 'auto';
+  chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+}
+
+async function handleChatSend() {
+  const text = chatInput.value.trim();
+  if (!text || chatBusy) {
+    return;
+  }
+
+  chatBusy = true;
+  chatSendBtn.disabled = true;
+  chatInput.value = '';
+  autoResizeChatInput();
+
+  // Add user message to chat
+  chatMessages.push({ role: 'user', content: text });
+  renderChatMessages();
+  scrollChatToBottom();
+
+  // Show typing indicator
+  showTypingIndicator();
+
+  try {
+    if (chatMode === 'chat') {
+      await sendChatModeMessage(text);
+    } else {
+      await sendSkillModeMessage(text);
+    }
+  } catch (error) {
+    console.error('[Sidepanel] Chat send failed:', error);
+    appendChatBubble('error', `Error: ${error.message}`);
+  } finally {
+    removeTypingIndicator();
+    chatBusy = false;
+    chatSendBtn.disabled = false;
+    scrollChatToBottom();
+  }
+}
+
+async function sendChatModeMessage(userText) {
+  // Build system message with page context
+  let systemContent = 'You are a helpful AI assistant.';
+
+  if (includeTabContent || includeSessionInfo) {
+    try {
+      const trustedDomains = (currentSettings && currentSettings.trustedSessionDomains) || [];
+      const tabData = await captureCurrentTab({ trustedDomains });
+      const parts = [`Current page: ${tabData.title} (${tabData.url})`];
+      if (includeTabContent && tabData.pageText) {
+        const truncated = tabData.pageText.length > 8000
+          ? tabData.pageText.slice(0, 8000) + '\n[...truncated]'
+          : tabData.pageText;
+        parts.push(`Page content:\n${truncated}`);
+      }
+      systemContent += '\n\n' + parts.join('\n\n');
+    } catch (err) {
+      console.warn('[Sidepanel] Could not capture tab for chat context:', err);
+    }
+  }
+
+  // Build OpenAI-compatible messages array
+  const messages = [
+    { role: 'system', content: systemContent }
+  ];
+
+  // Add conversation history
+  chatMessages.forEach((msg) => {
+    messages.push({ role: msg.role, content: msg.content });
+  });
+
+  const response = await sendRuntimeMessage({
+    command: 'chat-message',
+    chatMode: 'chat',
+    modelId: getSelectedModelId(),
+    messages
+  });
+
+  if (!response.success) {
+    throw new Error(response.error || 'Chat request failed');
+  }
+
+  const reply = response.reply || '';
+  chatMessages.push({ role: 'assistant', content: reply });
+  renderChatMessages();
+}
+
+async function sendSkillModeMessage(userText) {
+  // Build concatenated context string for skill mode
+  const contextString = buildSkillContextString();
+
+  // Build source with tab info if enabled
+  let source = { type: 'sidepanel-chat-skill' };
+  if (includeTabContent || includeSessionInfo) {
+    try {
+      const trustedDomains = (currentSettings && currentSettings.trustedSessionDomains) || [];
+      const tabData = await captureCurrentTab({ trustedDomains });
+      const trustedActive = isTrustedDomain(tabData.url, trustedDomains);
+      const allowSession = includeSessionInfo && trustedDomains.length > 0;
+      source = {
+        type: 'sidepanel-chat-skill',
+        url: tabData.url,
+        title: tabData.title,
+        ...(includeTabContent ? {
+          pageText: tabData.pageText || '',
+          headings: tabData.headings || [],
+          meta: tabData.meta || {},
+          links: tabData.links || []
+        } : {}),
+        ...(allowSession ? {
+          cookiesByDomain: tabData.cookiesByDomain || {},
+          cookieHeadersByDomain: tabData.cookieHeadersByDomain || {},
+        } : {}),
+        sessionInfoAllowed: allowSession
+      };
+    } catch (err) {
+      console.warn('[Sidepanel] Could not capture tab for skill context:', err);
+    }
+  }
+
+  const response = await sendRuntimeMessage({
+    command: 'chat-message',
+    chatMode: 'skill',
+    modelId: getSelectedModelId(),
+    contextString,
+    source
+  });
+
+  if (!response.success) {
+    throw new Error(response.error || 'Skill request failed');
+  }
+
+  if (response.accepted && response.jobId) {
+    // Skill runner queued - track the job for result delivery
+    pendingSkillJobId = response.jobId;
+    appendChatBubble('system-info', `Skill job queued (${response.jobId}). Waiting for result...`);
+    // The result will be picked up by syncTrackedJobStatuses or a poll
+    activeJobByMode.basic = response.jobId;
+    awaitSkillJobResult(response.jobId);
+    return;
+  }
+
+  // Direct response
+  const reply = response.reply || '';
+  chatMessages.push({ role: 'assistant', content: reply });
+  renderChatMessages();
+}
+
+function buildSkillContextString() {
+  const parts = [];
+  let turnIndex = 0;
+
+  for (let i = 0; i < chatMessages.length; i++) {
+    const msg = chatMessages[i];
+    if (msg.role === 'user') {
+      turnIndex++;
+      parts.push(`User - "${msg.content}"`);
+    } else if (msg.role === 'assistant') {
+      parts.push(`RUNRESULT#${turnIndex}\n${msg.content}`);
+    }
+  }
+
+  return parts.join('\n\n');
+}
+
+async function awaitSkillJobResult(jobId) {
+  // Poll for job completion — reuse the runner jobs refresh mechanism
+  const maxWait = 300000; // 5 minutes max
+  const pollInterval = 2000;
+  const start = Date.now();
+
+  while (Date.now() - start < maxWait) {
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+    try {
+      const response = await sendRuntimeMessage({ command: 'get-runner-job', jobId });
+      if (!response.success || !response.job) {
+        continue;
+      }
+
+      const job = response.job;
+      if (job.status === 'completed') {
+        const output = job.output || { response: job.responses || [] };
+        const firstResult = output.response && output.response[0];
+        const reply = firstResult ? (firstResult.response || '') : 'No response from skill runner.';
+        chatMessages.push({ role: 'assistant', content: reply });
+        removeTypingIndicator();
+        renderChatMessages();
+        scrollChatToBottom();
+        chatBusy = false;
+        chatSendBtn.disabled = false;
+        pendingSkillJobId = null;
+        return;
+      }
+
+      if (job.status === 'failed' || job.status === 'timed_out') {
+        const errorMsg = job.error || `Skill job ${job.status}`;
+        appendChatBubble('error', errorMsg);
+        removeTypingIndicator();
+        chatBusy = false;
+        chatSendBtn.disabled = false;
+        pendingSkillJobId = null;
+        return;
+      }
+
+      // Still running or queued — continue polling
+    } catch (err) {
+      console.warn('[Sidepanel] Skill job poll error:', err);
+    }
+  }
+
+  // Timed out waiting
+  appendChatBubble('error', 'Timed out waiting for skill runner result.');
+  removeTypingIndicator();
+  chatBusy = false;
+  chatSendBtn.disabled = false;
+  pendingSkillJobId = null;
+}
+
+function renderChatMessages() {
+  chatMessagesEl.innerHTML = '';
+
+  if (chatMessages.length === 0) {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'chat-bubble system-info';
+    placeholder.textContent = chatMode === 'chat'
+      ? 'Start a conversation. Type a message below.'
+      : 'Skill mode active. Your messages will be processed by the skill runner.';
+    chatMessagesEl.appendChild(placeholder);
+    return;
+  }
+
+  chatMessages.forEach((msg) => {
+    if (msg.role === 'user') {
+      const bubble = document.createElement('div');
+      bubble.className = 'chat-bubble user';
+      bubble.textContent = msg.content;
+      chatMessagesEl.appendChild(bubble);
+    } else if (msg.role === 'assistant') {
+      const bubble = document.createElement('div');
+      bubble.className = 'chat-bubble assistant';
+      const rendered = window.MarkdownRenderer
+        ? MarkdownRenderer.render(msg.content)
+        : escapeHtml(msg.content);
+      bubble.innerHTML = `<div class="markdown-content">${rendered}</div>`;
+      chatMessagesEl.appendChild(bubble);
+    }
+  });
+
+  scrollChatToBottom();
+}
+
+function appendChatBubble(type, text) {
+  const bubble = document.createElement('div');
+  bubble.className = `chat-bubble ${type}`;
+  bubble.textContent = text;
+  chatMessagesEl.appendChild(bubble);
+  scrollChatToBottom();
+}
+
+function showTypingIndicator() {
+  removeTypingIndicator();
+  const indicator = document.createElement('div');
+  indicator.className = 'chat-typing';
+  indicator.id = 'chatTypingIndicator';
+  indicator.textContent = chatMode === 'chat' ? 'Thinking...' : 'Running skill...';
+  chatMessagesEl.appendChild(indicator);
+  scrollChatToBottom();
+}
+
+function removeTypingIndicator() {
+  const existing = document.getElementById('chatTypingIndicator');
+  if (existing) {
+    existing.remove();
+  }
+}
+
+function scrollChatToBottom() {
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
 }

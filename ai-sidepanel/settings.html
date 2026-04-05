@@ -277,6 +277,14 @@
           </select>
           <div class="help-text">Developer mode shows Basic/Advanced/API tabs. User mode only shows basic chat/query with settings/history.</div>
         </div>
+        <div class="form-group">
+          <label for="defaultChatMode">Default Chat Mode</label>
+          <select id="defaultChatMode">
+            <option value="chat">Chat (OpenAI-compatible multi-turn)</option>
+            <option value="skill">Skill (Skill runner / single-request)</option>
+          </select>
+          <div class="help-text">Chat mode sends multi-turn conversations to the API. Skill mode routes each message through the skill runner with accumulated context.</div>
+        </div>
       </div>
 
       <div class="section">

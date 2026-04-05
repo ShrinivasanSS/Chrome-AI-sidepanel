@@ -267,6 +267,42 @@ Status:
 - Implementation completed by AI on 22/Mar/2026.
 - Human validation pending.
 
+## Date - 05/Apr/2026
+
+### AI generated updates
+
+#### Proposed checklist - Chat Mode (default) with Skill Mode fallback
+
+Requested change:
+- Add a Chat Mode (default) where the user sees a chat bar with input box and conversational chat messages.
+- When mode is "chat", messages are sent to the backend in OpenAI/Anthropic compatible format (multi-turn `messages` array with `system`, `user`, `assistant` roles) with current page info in the system message. Works like a regular chatbot.
+- When mode is "skill" (the existing behavior), the chat still displays in the same chat UI, but behind the scenes it launches the skill launcher. When the user sends follow-up messages, the context is passed as a concatenated string: `User - "USER_MESSAGE#1"\nRUNRESULT#1\n\nUser - "USER_MESSAGE#2"` so the runner sees the full conversation history.
+- The "Basic" mode becomes the chat view. The mode toggle (Chat vs Skill) determines backend routing.
+- Chat history (messages) is stored per-session in memory and optionally persisted.
+
+Assumptions/defaults:
+- The existing Basic mode UI is replaced by a chat-style interface (message bubbles, input bar at bottom).
+- A toggle switch in the chat area lets users pick "Chat" or "Skill" mode. Default is configurable in settings (default: "chat").
+- In Chat mode, the extension sends the full `messages` array to the OpenAI-compatible API endpoint each turn, maintaining proper multi-turn conversation.
+- In Skill mode, each user message triggers the existing skill-runner flow, but with accumulated conversation context concatenated into the input string.
+- The Advanced and API tabs remain available in developer mode, unchanged.
+- Page context (URL, title, optionally page content) is included in the system message for Chat mode or in the runner payload for Skill mode — respecting the existing `includeTabContent` toggle.
+
+Planned work items:
+- [x] **Chat UI**: Replace the Basic mode's textarea+button with a chat interface: scrollable message area (user/assistant bubbles), input bar with send button at the bottom, and a Chat/Skill mode toggle.
+- [x] **Chat Mode toggle**: Add a "Chat" / "Skill" toggle in the chat area header. Persist selected chat mode in `chrome.storage.local`. Add default chat mode setting in Settings page.
+- [x] **Chat message state**: Maintain an in-memory `chatMessages` array (role/content pairs) for the current session. Clear on explicit "New Chat" action.
+- [x] **Chat Mode backend**: When in Chat mode, build OpenAI-compatible `messages` array (system message with page context + conversation history) and send via the existing `callAi` path through the service worker. Display streamed/returned assistant response as a new chat bubble.
+- [x] **Skill Mode backend**: When in Skill mode, concatenate conversation history into a single string format (`User - "msg1"\nRUNRESULT1\n\nUser - "msg2"`) and send as the task input through the existing skill-runner or API processing path. Display the result as an assistant bubble.
+- [x] **Service worker changes**: Add a new `chat-message` command that accepts the full messages array (for chat mode) or the concatenated context string (for skill mode) and routes to the appropriate backend. Return the assistant response.
+- [x] **CSS styling**: Chat bubbles (user right-aligned, assistant left-aligned), input bar fixed at bottom of chat area, auto-scroll to latest message.
+- [x] **Settings integration**: Add "Default Chat Mode" dropdown (Chat/Skill) in settings page. Wire into `StorageUtils` and settings save/load.
+- [x] **Update README.md, Progress.md, Agent-Notes.md** with chat mode documentation.
+
+Status:
+- Implementation completed by AI on 05/Apr/2026.
+- Human validation pending.
+
 ## Date - 23/Mar/2026
 
 ### AI generated updates

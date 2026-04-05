@@ -35,6 +35,7 @@
   const DEFAULT_RUNNER_COOKIE_ENV_MAP = {};
 
   const DEFAULT_THEME = 'light';
+  const DEFAULT_CHAT_MODE = 'chat'; // 'chat' or 'skill'
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -470,6 +471,7 @@
     DEFAULT_RUNNER_CONFIG: clone(DEFAULT_RUNNER_CONFIG),
     DEFAULT_RUNNER_COOKIE_ENV_MAP: clone(DEFAULT_RUNNER_COOKIE_ENV_MAP),
     DEFAULT_THEME,
+    DEFAULT_CHAT_MODE,
     loadSettings,
     saveSettings,
     sanitizeSettings,

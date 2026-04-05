@@ -6,9 +6,12 @@ Chrome side panel extension for sending structured and multimodal requests to an
 
 - Global side panel on all sites using Manifest V3 and `<all_urls>`
 - Three entry modes:
-  - `Developer mode`: `Basic`, `Advanced`, and `API`
-  - `User mode`: `Basic` only (with settings/history still available)
-- Sidepanel input toggle for Basic/Advanced:
+  - `Developer mode`: `Basic` (Chat), `Advanced`, and `API`
+  - `User mode`: `Basic` (Chat) only (with settings/history still available)
+- Basic mode features a **Chat interface** with two sub-modes:
+  - `Chat mode` (default): Multi-turn OpenAI-compatible conversation with system context
+  - `Skill mode`: Routes messages through the skill runner with accumulated conversation context
+- Sidepanel input toggle for Chat/Advanced:
   - `Include Active Tab Content` (default: off)
   - `Include Cookies/Session` (default: on, trusted domains only)
 - Sidepanel activity area has toggleable views:
@@ -94,6 +97,42 @@ http://localhost/skills/repository/
 Notes:
 - The extension fetches the repository URL and discovers all links that end with `.skill`.
 - Every discovered `.skill` package is downloaded and parsed for `SKILL.md`.
+
+## Chat Mode
+
+The Basic tab now shows a chat-style interface instead of a simple textarea. Users can toggle between two chat modes:
+
+### Chat Mode (default)
+
+- Sends the full conversation as an OpenAI-compatible `messages` array to the backend API.
+- System message includes page context (URL, title, optionally page content) when the "Include Active Tab Content" toggle is enabled.
+- Multi-turn: the full conversation history (all user and assistant messages) is sent each turn.
+- Works with any OpenAI-compatible backend.
+
+### Skill Mode
+
+- Routes each message through the existing skill-runner or API processing path.
+- Conversation history is concatenated into a single string in the format:
+  ```
+  User - "first message"
+
+  RUNRESULT#1
+  assistant response here
+
+  User - "follow-up message"
+  ```
+- This concatenated context is sent as the task input, so the runner sees the full conversation history.
+- If the processing target is set to Skill Runner, the request is queued and the result is polled asynchronously.
+- If the processing target is API, the response is returned directly.
+
+### Chat UI features
+
+- **Message bubbles**: User messages (right-aligned, blue), assistant responses (left-aligned, with markdown rendering).
+- **Input bar**: Textarea with auto-resize, send on Enter (Shift+Enter for newlines).
+- **New Chat**: Clears the conversation and starts fresh.
+- **Mode toggle**: Chat/Skill toggle persisted in `chrome.storage.local`.
+- **Default mode**: Configurable in Settings page (`Default Chat Mode` dropdown).
+- **Typing indicator**: Shows "Thinking..." or "Running skill..." while waiting for response.
 
 ## Supported request formats
 

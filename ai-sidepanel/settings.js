@@ -36,6 +36,7 @@ const runnerTimeoutMsEl = document.getElementById('runnerTimeoutMs');
 const themeModeEl = document.getElementById('themeMode');
 const trustedSessionDomainsEl = document.getElementById('trustedSessionDomains');
 const runnerCookieEnvMapEl = document.getElementById('runnerCookieEnvMap');
+const defaultChatModeEl = document.getElementById('defaultChatMode');
 
 const storageTotalEl = document.getElementById('storageTotal');
 const storageHistoryEl = document.getElementById('storageHistory');
@@ -91,6 +92,11 @@ function renderSettings(settings) {
     ? settings.trustedSessionDomains.join('\n')
     : '';
   runnerCookieEnvMapEl.value = formatCookieEnvMap(settings.runnerCookieEnvMap, settings.trustedSessionDomains);
+
+  // Load default chat mode from chrome.storage.local (not part of sanitizeSettings)
+  chrome.storage.local.get(['chatMode']).then((result) => {
+    defaultChatModeEl.value = result.chatMode === 'skill' ? 'skill' : 'chat';
+  });
 
   modelsContainerEl.innerHTML = '';
   settings.models.forEach((model) => renderModelRow(model));
@@ -280,6 +286,9 @@ async function handleSave(event) {
     saveBtn.disabled = true;
     let updatedState = null;
     currentSettings = await StorageUtils.saveSettings(settings);
+    // Save chat mode separately (not part of sanitized settings schema)
+    const selectedChatMode = defaultChatModeEl.value === 'skill' ? 'skill' : 'chat';
+    await chrome.storage.local.set({ chatMode: selectedChatMode });
     renderSettings(currentSettings);
     try {
       const syncResponse = await sendRuntimeMessage({ command: 'settings-updated' });

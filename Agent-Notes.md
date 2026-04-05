@@ -95,3 +95,13 @@ Use this section for reducing repeated searches.
 - Simplified runner env vars: launcher now exports only `SKILL_RUNNER_COOKIES` + `SKILL_RUNNER_REQUEST_HEADERS` for the active domain (plus `SKILL_RUNNER_ACTIVE_DOMAIN` as metadata). This avoids per-domain env names and removes the need for `runnerCookieEnvMap` in settings/UI.
 - Extension now generates request header maps in the service worker and forwards them alongside cookie headers in runner payloads.
 - `site24x7_client.py` was updated to read only the two simplified env vars and no longer parses per-domain env names.
+
+## April 5 2026
+
+- **Chat Mode replaces old Basic mode UI.** The previous textarea + "Capture & Analyze" button is replaced by a chat-style interface with message bubbles, an input bar, and Chat/Skill toggle. The old `handleCapture` function and `basicQuestion`/`captureBtn`/`basicStatus`/`basicOutput` elements are no longer connected to the new chat UI but left in the JS for backward compatibility if Advanced mode needs them.
+- **Chat vs Skill mode stored in `chrome.storage.local` as `chatMode`**, not inside the sanitized settings schema. This keeps it lightweight and avoids migrating the settings schema. The settings page reads/writes it directly via `chrome.storage.local.get/set`.
+- **Chat mode sends full OpenAI messages array.** Each turn builds: `[system (with page context), ...conversation history]`. Page context in the system message is truncated to 8KB to avoid token bloat.
+- **Skill mode concatenates conversation as a string.** Format: `User - "msg"\n\nRUNRESULT#N\nresponse\n\nUser - "next msg"`. This preserves conversation context across skill-runner invocations without requiring the runner to understand multi-turn protocols.
+- **Skill mode with queued runner jobs requires async polling.** When the skill runner returns `accepted + jobId`, the chat UI polls `get-runner-job` every 2 seconds until the job completes, then injects the result as an assistant bubble. A 5-minute timeout prevents indefinite waiting.
+- **Service worker has a new `chat-message` command** that dispatches to either `callAiWithMessages` (chat mode) or `processRequestLifecycle` via `enqueueSkillRunnerRequest` (skill mode). The `callAiWithMessages` function accepts an arbitrary messages array and does not go through `RequestNormalizer`.
+- **The `DEFAULT_CHAT_MODE` constant** is in `StorageUtils` for reference but is not enforced through `sanitizeSettings` — it's a display-layer concern stored separately.
