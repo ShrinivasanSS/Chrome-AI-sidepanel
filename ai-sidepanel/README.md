@@ -38,6 +38,7 @@ Open the extension options page and configure:
 - `Theme Mode` (`Light` or `Dark`)
 - `Extension Mode` (`Developer` or `User`)
 - `Trusted Session Domains` (whitelist for forwarding cookies/session storage to runner)
+- `Runner Cookie Env Mapping` (`domain=ENV_VAR`, auto-default generated when omitted)
 - `API Base URL`
 - `API Key`
 - One or more model entries
@@ -199,6 +200,8 @@ For sidepanel Basic and Advanced modes:
 - If `Target = Skill Runner`, the extension bypasses API chat-completions calls.
 - Skill-runner requests are queued in extension storage and return immediately with `jobId`.
 - Queue states: `queued`, `running`, `completed`, `failed`, `timed_out`.
+- When the side panel polls job status, the queue processor is kick-started to ensure queued jobs begin execution.
+- Stale `running` jobs (missing runtime cache or exceeding timeout) are automatically marked failed/timed_out so the queue can advance.
 - Sidepanel polls queue status and shows wait/timeout timers in `Current Tasks`.
 - In User mode, Basic prompt flow sends structured JSON context to runner host:
   - `runnerInput.userMessage` + `runnerInput.taskInput` (without bulky normalized cookie/tab blobs)
@@ -215,11 +218,8 @@ For sidepanel Basic and Advanced modes:
   - optional context metadata
 - Skill launcher builds the final CLI prompt from `runnerInput` and injects session-aware usage guidance.
 - Runner process env includes:
-  - `SKILL_RUNNER_SESSION_INFO_JSON` (cookies + storage snapshot JSON for trusted domains)
-  - `SKILL_RUNNER_SESSION_ALLOWED` (`1` if session forwarding is allowed)
-  - `SKILL_RUNNER_ACTIVE_DOMAIN` (active tab hostname)
-  - `SKILL_RUNNER_COOKIES` (cookie header for active domain)
-  - `SKILL_RUNNER_REQUEST_HEADERS` (JSON request headers for active domain)
+  - `SKILL_RUNNER_COOKIES` (cookie header string for the active domain)
+  - `SKILL_RUNNER_REQUEST_HEADERS` (JSON object with browser request headers)
 - Local runner mode:
   - uses `chrome.runtime.sendNativeMessage(...)`
   - requires an installed Native Messaging host that launches the actual CLI binary

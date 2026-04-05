@@ -4,6 +4,7 @@ const RUNNER_JOBS_KEY = 'runnerJobsState';
 const MAX_RUNNER_JOBS = 80;
 let runnerQueueProcessing = false;
 const runnerJobRuntimeCache = new Map();
+const RUNNER_JOB_STALE_BUFFER_MS = 5000;
 
 chrome.runtime.onInstalled.addListener(async () => {
   try {
@@ -373,6 +374,49 @@ async function setRunnerJobsState(state) {
   return normalized;
 }
 
+async function recoverStaleRunnerJobs(reason) {
+  const state = await getRunnerJobsState();
+  const now = Date.now();
+  let changed = false;
+
+  const updatedJobs = state.jobs.map((job) => {
+    if (!job || job.status !== 'running') {
+      return job;
+    }
+
+    const startedAt = job.activeTaskStartedAt || job.startedAt;
+    const startedMs = startedAt ? new Date(startedAt).getTime() : null;
+    const timeoutMs = job.activeTaskTimeoutMs || job.timeoutMs || 120000;
+    const hasRuntime = runnerJobRuntimeCache.has(job.id);
+    const timedOut = startedMs
+      ? (now - startedMs) > (timeoutMs + RUNNER_JOB_STALE_BUFFER_MS)
+      : false;
+
+    if (hasRuntime && !timedOut) {
+      return job;
+    }
+
+    changed = true;
+    return {
+      ...job,
+      status: timedOut ? 'timed_out' : 'failed',
+      error: timedOut
+        ? 'Runner job timed out before completion.'
+        : `Runner job lost (${reason || 'runtime cache missing'}).`,
+      finishedAt: new Date().toISOString(),
+      activeTaskIndex: null,
+      activeTaskStartedAt: null,
+      activeTaskTimeoutMs: null
+    };
+  });
+
+  if (changed) {
+    await setRunnerJobsState({ jobs: updatedJobs });
+  }
+
+  return changed;
+}
+
 async function listRunnerJobs() {
   const state = await getRunnerJobsState();
   return state.jobs.slice().sort((a, b) => {
@@ -490,8 +534,12 @@ async function enqueueSkillRunnerRequest(options) {
 
 async function handleGetRunnerJobs(sendResponse) {
   try {
+    await recoverStaleRunnerJobs('status-poll');
     const jobs = await listRunnerJobs();
     sendResponse({ success: true, jobs: decorateJobsForView(jobs) });
+    if (jobs.some((job) => job.status === 'queued') && !jobs.some((job) => job.status === 'running')) {
+      startRunnerQueueProcessing();
+    }
   } catch (error) {
     sendResponse({ success: false, error: error.message });
   }
@@ -499,6 +547,7 @@ async function handleGetRunnerJobs(sendResponse) {
 
 async function handleGetRunnerJob(request, sendResponse) {
   try {
+    await recoverStaleRunnerJobs('status-poll');
     const job = await findRunnerJob(request.jobId);
     if (!job) {
       sendResponse({ success: false, error: 'Runner job not found' });
@@ -506,6 +555,9 @@ async function handleGetRunnerJob(request, sendResponse) {
     }
     const [decorated] = decorateJobsForView([job]);
     sendResponse({ success: true, job: decorated });
+    if (job.status === 'queued') {
+      startRunnerQueueProcessing();
+    }
   } catch (error) {
     sendResponse({ success: false, error: error.message });
   }
@@ -543,6 +595,7 @@ async function startRunnerQueueProcessing() {
   runnerQueueProcessing = true;
   try {
     while (true) {
+      await recoverStaleRunnerJobs('queue-start');
       const state = await getRunnerJobsState();
       if (state.jobs.some((job) => job.status === 'running')) {
         break;
@@ -733,18 +786,38 @@ function buildRunnerInput(agentPrompt, task, context) {
   const safeContext = context && typeof context === 'object' ? context : {};
   const source = safeContext.source && typeof safeContext.source === 'object' ? safeContext.source : {};
   const selectedSkills = Array.isArray(safeContext.selectedSkills) ? safeContext.selectedSkills : [];
-  const cookies = Array.isArray(source.cookies) ? source.cookies : [];
-  const cookiesByDomain = source.cookiesByDomain && typeof source.cookiesByDomain === 'object'
-    ? source.cookiesByDomain
-    : {};
   const cookieHeadersByDomain = source.cookieHeadersByDomain && typeof source.cookieHeadersByDomain === 'object'
     ? source.cookieHeadersByDomain
     : {};
-  const requestHeadersByDomain = source.requestHeadersByDomain && typeof source.requestHeadersByDomain === 'object'
-    ? source.requestHeadersByDomain
-    : {};
-  const activeDomain = typeof source.activeDomain === 'string' ? source.activeDomain : '';
   const taskImages = Array.isArray(task && task.images) ? task.images : [];
+
+  // Derive activeDomain from source URL
+  let activeDomain = '';
+  try {
+    if (source.url) {
+      activeDomain = normalizeCookieDomain(new URL(source.url).hostname);
+    }
+  } catch (e) { /* ignore */ }
+
+  // Build browser request headers from actual browser values
+  const requestHeaders = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': (typeof navigator !== 'undefined' && navigator.language) || 'en-US',
+    'User-Agent': (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none'
+  };
+  const requestHeadersJson = JSON.stringify(requestHeaders);
+
+  // Build per-domain env variables: { domain: { SKILL_RUNNER_COOKIES, SKILL_RUNNER_REQUEST_HEADERS } }
+  const domains = {};
+  Object.keys(cookieHeadersByDomain).forEach((domain) => {
+    domains[domain] = {
+      SKILL_RUNNER_COOKIES: cookieHeadersByDomain[domain] || '',
+      SKILL_RUNNER_REQUEST_HEADERS: requestHeadersJson
+    };
+  });
 
   return {
     request: {
@@ -777,12 +850,8 @@ function buildRunnerInput(agentPrompt, task, context) {
       links: Array.isArray(source.links) ? source.links : []
     },
     sessionInfo: {
-      cookies,
-      cookieHeader: source.cookieHeader || '',
-      cookiesByDomain,
-      cookieHeadersByDomain,
-      requestHeadersByDomain,
       activeDomain,
+      domains,
       sessionInfoAllowed: !!source.sessionInfoAllowed
     }
   };
@@ -1112,48 +1181,28 @@ function normalizeCookieDomain(domain) {
     .replace(/:\d+$/, '');
 }
 
-function buildDefaultRequestHeaders() {
-  const fallbackAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
-  const userAgent = (self.navigator && self.navigator.userAgent) ? self.navigator.userAgent : fallbackAgent;
-  const language = (self.navigator && self.navigator.language) ? self.navigator.language : 'en-GB';
-  const baseLanguage = language.split('-')[0] || 'en';
-  return {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': `${language},${baseLanguage};q=0.9`,
-    'User-Agent': userAgent,
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none'
-  };
-}
-
 async function collectTrustedDomainCookies(trustedDomains) {
   const domains = Array.isArray(trustedDomains)
     ? trustedDomains.map((entry) => normalizeCookieDomain(entry)).filter(Boolean)
     : [];
   const cookiesByDomain = {};
   const cookieHeadersByDomain = {};
-  const requestHeadersByDomain = {};
-  const defaultHeaders = buildDefaultRequestHeaders();
 
   for (const domain of domains) {
     try {
       const cookies = await chrome.cookies.getAll({ domain });
       cookiesByDomain[domain] = cookies;
       cookieHeadersByDomain[domain] = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
-      requestHeadersByDomain[domain] = { ...defaultHeaders };
     } catch (error) {
       console.warn('[Service Worker] Unable to read trusted-domain cookies:', domain, error);
       cookiesByDomain[domain] = [];
       cookieHeadersByDomain[domain] = '';
-      requestHeadersByDomain[domain] = { ...defaultHeaders };
     }
   }
 
   return {
     cookiesByDomain,
-    cookieHeadersByDomain,
-    requestHeadersByDomain
+    cookieHeadersByDomain
   };
 }
 
@@ -1183,7 +1232,6 @@ async function handleTabCapture(request, sendResponse) {
     }
 
     const trustedCookies = await collectTrustedDomainCookies(request && request.trustedDomains);
-    const activeDomain = tab.url ? normalizeCookieDomain(tab.url) : '';
 
     sendResponse({
       success: true,
@@ -1200,9 +1248,7 @@ async function handleTabCapture(request, sendResponse) {
         cookies,
         cookieHeader,
         cookiesByDomain: trustedCookies.cookiesByDomain,
-        cookieHeadersByDomain: trustedCookies.cookieHeadersByDomain,
-        requestHeadersByDomain: trustedCookies.requestHeadersByDomain,
-        activeDomain
+        cookieHeadersByDomain: trustedCookies.cookieHeadersByDomain
       }
     });
   } catch (error) {

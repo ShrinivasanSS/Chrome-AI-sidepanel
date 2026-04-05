@@ -286,6 +286,11 @@
           <textarea id="trustedSessionDomains" placeholder="example.com&#10;*.internal.example.com"></textarea>
           <div class="help-text">Only these domains can have cookies/session info forwarded when "Include Cookies/Session" is enabled in sidepanel.</div>
         </div>
+        <div class="form-group">
+          <label for="runnerCookieEnvMap">Runner Cookie Env Mapping (`domain=ENV_VAR`)</label>
+          <textarea id="runnerCookieEnvMap" placeholder="localhost=LOCALHOST_COOKIES&#10;example.com=EXAMPLE_COM_COOKIES"></textarea>
+          <div class="help-text">Optional overrides. Any trusted domain not listed here gets an auto env var name (for example `LOCALHOST_COOKIES`).</div>
+        </div>
       </div>
 
       <div class="section">
