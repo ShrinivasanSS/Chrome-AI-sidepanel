@@ -77,7 +77,8 @@
     const label = sanitizeText(entry.label, value);
     const id = sanitizeText(entry.id, makeModelId(label || value, index));
 
-    return { id, label, value };
+    const vision = !!(entry.vision);
+    return { id, label, value, vision };
   }
 
   function normalizeModels(models, legacyModel) {
@@ -107,7 +108,8 @@
       normalized.push({
         id,
         label: model.label,
-        value: model.value
+        value: model.value,
+        vision: !!model.vision
       });
     });
 

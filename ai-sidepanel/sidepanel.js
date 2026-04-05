@@ -40,6 +40,8 @@ const chatMessagesEl = document.getElementById('chatMessages');
 const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const chatCancelBtn = document.getElementById('chatCancelBtn');
+const screenshotToggleGroup = document.getElementById('screenshotToggleGroup');
+const includeScreenshotToggle = document.getElementById('includeScreenshotToggle');
 
 let currentOutput = null;
 let currentMode = 'basic';
@@ -206,6 +208,9 @@ function renderModelOptions(settings) {
   modelSelectEl.value = settings.models.some((model) => model.id === selected)
     ? selected
     : settings.defaultModelId;
+
+  updateScreenshotToggleVisibility();
+  modelSelectEl.addEventListener('change', updateScreenshotToggleVisibility);
 }
 
 function getSelectedModelId() {
@@ -976,9 +981,22 @@ async function sendChatModeMessage(userText) {
     { role: 'system', content: systemContent }
   ];
 
-  // Add conversation history
-  chatMessages.forEach((msg) => {
-    messages.push({ role: msg.role, content: msg.content });
+  // Add conversation history — for the latest user message, attach screenshot if enabled
+  const shouldIncludeScreenshot = includeScreenshotToggle.checked && isSelectedModelVisionCapable();
+  let screenshotTilesForMessage = [];
+
+  if (shouldIncludeScreenshot) {
+    screenshotTilesForMessage = await captureAndTileScreenshot();
+  }
+
+  chatMessages.forEach((msg, idx) => {
+    const isLastUser = (msg.role === 'user' && idx === chatMessages.length - 1);
+    if (isLastUser && screenshotTilesForMessage.length > 0) {
+      // Send as multimodal message with text + image tiles
+      messages.push(buildUserMessageWithScreenshot(msg.content, screenshotTilesForMessage));
+    } else {
+      messages.push({ role: msg.role, content: msg.content });
+    }
   });
 
   const response = await sendRuntimeMessage({
@@ -1203,4 +1221,103 @@ function removeTypingIndicator() {
 
 function scrollChatToBottom() {
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+// ─── Screenshot / Vision Logic ──────────────────────────────────────────────
+
+let screenshotTiles = []; // Array of data URLs
+let screenshotCapturedForUrl = ''; // URL the screenshot was captured for
+const TILE_WIDTH = 1280;
+const TILE_HEIGHT = 720;
+
+function isSelectedModelVisionCapable() {
+  if (!currentSettings || !Array.isArray(currentSettings.models)) return false;
+  const selectedId = getSelectedModelId();
+  const model = currentSettings.models.find((m) => m.id === selectedId);
+  return model && model.vision === true;
+}
+
+function updateScreenshotToggleVisibility() {
+  const visible = isSelectedModelVisionCapable();
+  screenshotToggleGroup.style.display = visible ? 'inline' : 'none';
+  if (!visible) {
+    includeScreenshotToggle.checked = false;
+  }
+}
+
+async function captureAndTileScreenshot() {
+  // Get active tab URL to check if we need to re-capture
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const currentUrl = tab ? tab.url : '';
+
+    // Skip if we already have tiles for this URL
+    if (screenshotTiles.length > 0 && screenshotCapturedForUrl === currentUrl) {
+      return screenshotTiles;
+    }
+
+    // Capture the visible tab
+    const screenshotDataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+
+    // Load the image, split into tiles
+    const tiles = await splitImageIntoTiles(screenshotDataUrl, TILE_WIDTH, TILE_HEIGHT);
+    screenshotTiles = tiles;
+    screenshotCapturedForUrl = currentUrl;
+    return tiles;
+  } catch (err) {
+    console.warn('[Sidepanel] Screenshot capture failed:', err);
+    return [];
+  }
+}
+
+function splitImageIntoTiles(dataUrl, tileW, tileH) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const fullW = img.naturalWidth;
+      const fullH = img.naturalHeight;
+
+      // If the image fits in a single tile, just return it as-is
+      if (fullW <= tileW && fullH <= tileH) {
+        resolve([dataUrl]);
+        return;
+      }
+
+      const tiles = [];
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = tileW;
+      canvas.height = tileH;
+
+      for (let y = 0; y < fullH; y += tileH) {
+        for (let x = 0; x < fullW; x += tileW) {
+          const drawW = Math.min(tileW, fullW - x);
+          const drawH = Math.min(tileH, fullH - y);
+          canvas.width = drawW;
+          canvas.height = drawH;
+          ctx.clearRect(0, 0, drawW, drawH);
+          ctx.drawImage(img, x, y, drawW, drawH, 0, 0, drawW, drawH);
+          tiles.push(canvas.toDataURL('image/png'));
+        }
+      }
+
+      resolve(tiles);
+    };
+    img.onerror = () => resolve([]);
+    img.src = dataUrl;
+  });
+}
+
+function buildUserMessageWithScreenshot(textContent, tiles) {
+  // Build multimodal user message with text + image tiles
+  const content = [
+    { type: 'text', text: textContent }
+  ];
+  tiles.forEach((tile, index) => {
+    content.push({
+      type: 'image_url',
+      image_url: { url: tile }
+    });
+  });
+  return { role: 'user', content };
 }

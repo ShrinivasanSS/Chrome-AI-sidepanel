@@ -133,7 +133,8 @@ function renderModelRow(model) {
       <label>Model value</label>
       <input type="text" class="model-value" placeholder="gpt-4o-mini" value="${escapeAttribute(model.value || model.label || '')}">
     </div>
-    <div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <label style="margin:0;font-size:12px;white-space:nowrap;"><input type="checkbox" class="model-vision" ${model.vision ? 'checked' : ''}> Vision</label>
       <button type="button" class="remove-model-btn danger">Remove</button>
     </div>
   `;
@@ -153,10 +154,13 @@ function collectModels() {
   return rows.map((row, index) => {
     const label = row.querySelector('.model-label').value.trim();
     const value = row.querySelector('.model-value').value.trim();
+    const visionEl = row.querySelector('.model-vision');
+    const vision = visionEl ? visionEl.checked : false;
     return {
       id: `${(label || value || `model-${index + 1}`).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
       label: label || value,
-      value: value || label
+      value: value || label,
+      vision
     };
   }).filter((model) => model.label && model.value);
 }

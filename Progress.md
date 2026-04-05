@@ -303,6 +303,28 @@ Status:
 - Implementation completed by AI on 05/Apr/2026.
 - Human validation pending.
 
+#### Follow-up update - Vision-capable model hint + Include Screenshot button
+
+Requested change:
+- Add a "Vision capable" checkbox per model in Settings so the user can hint which models support image input.
+- If the currently selected model is vision-capable, show an "Include Screenshot" button in the sidepanel chat area.
+- When clicked, capture a full-page screenshot, split it into 1280×720 chunks (to preserve quality), and include the chunks as `image_url` base64 entries in the chat `messages` array.
+- Only send screenshot once per URL (don't resend on successive messages unless the tab URL changed).
+
+Planned work items:
+- [x] Add `vision` boolean to model settings row (checkbox). Persist alongside `label`/`value`.
+- [x] Expose `vision` in `collectModels`, `renderModelRow`, `normalizeModelEntry`, and settings save/load.
+- [x] In sidepanel, check if selected model has `vision: true`. If so, show "Include Screenshot" toggle/button in the input context area.
+- [x] When enabled, capture full-page screenshot via `chrome.tabs.captureVisibleTab()`, split into 1280×720 tile chunks using an offscreen canvas, and store the base64 tiles.
+- [x] Track last-screenshot URL. Only re-capture when the active tab URL changes.
+- [x] In Chat mode: append image tiles as `image_url` content blocks in the user message (first turn or when URL changes).
+- [ ] In Skill mode: include screenshot tiles in the source/context payload. *(deferred — skill runner does not consume image_url)*
+- [ ] Update README.md and Agent-Notes.md. *(partial — can be updated after human verification)*
+
+Status:
+- Implementation completed by AI on 05/Apr/2026.
+- Human validation pending.
+
 ## Date - 23/Mar/2026
 
 ### AI generated updates
