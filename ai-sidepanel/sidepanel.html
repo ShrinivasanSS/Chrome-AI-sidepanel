@@ -275,9 +275,9 @@
     .chat-container {
       display: flex;
       flex-direction: column;
-      height: 400px;
-      min-height: 200px;
-      max-height: 70vh;
+      height: 60vh;
+      min-height: 300px;
+      max-height: 80vh;
       position: relative;
     }
 
@@ -366,12 +366,12 @@
 
     .chat-input-bar textarea {
       flex: 1;
-      min-height: 40px;
-      max-height: 120px;
+      min-height: 52px;
+      max-height: 160px;
       resize: none;
-      padding: 10px 12px;
+      padding: 12px 14px;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 12px;
       font-family: inherit;
       font-size: 14px;
       background-color: var(--toolbar-bg);
@@ -380,9 +380,18 @@
     }
 
     .chat-input-bar button {
-      padding: 10px 16px;
+      padding: 12px 18px;
       border-radius: 10px;
       flex-shrink: 0;
+    }
+
+    .chat-input-bar button.cancel-btn {
+      background-color: #c5221f;
+      display: none;
+    }
+
+    .chat-input-bar button.cancel-btn:hover {
+      background-color: #a50e0e;
     }
 
     .chat-typing {
@@ -391,6 +400,138 @@
       font-size: 13px;
       font-style: italic;
       padding: 4px 8px;
+    }
+
+    /* Code block styles */
+    .code-block-wrapper {
+      margin: 10px 0;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .code-block-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      background: var(--toolbar-bg);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+
+    .code-lang {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .code-copy-btn {
+      padding: 3px 10px;
+      font-size: 11px;
+      border-radius: 4px;
+      background: #eef3fd;
+      color: #1a73e8;
+      border: none;
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    .code-copy-btn:hover {
+      background: #dfe8fb;
+    }
+
+    .code-copy-btn.copied {
+      background: #e6f4ea;
+      color: #137333;
+    }
+
+    [data-theme="dark"] .code-copy-btn {
+      background: #333a4a;
+      color: #8ab4f8;
+    }
+
+    [data-theme="dark"] .code-copy-btn:hover {
+      background: #3d4556;
+    }
+
+    [data-theme="dark"] .code-copy-btn.copied {
+      background: #1e3a2f;
+      color: #81c995;
+    }
+
+    .code-block-wrapper pre {
+      margin: 0;
+      min-height: auto;
+      border: none;
+      border-radius: 0;
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-x: auto;
+    }
+
+    .markdown-content code.inline-code {
+      background: var(--toolbar-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+    }
+
+    /* Table styles */
+    .markdown-content .table-wrapper {
+      overflow-x: auto;
+      margin: 10px 0;
+    }
+
+    .markdown-content table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+    }
+
+    .markdown-content table th,
+    .markdown-content table td {
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      text-align: left;
+    }
+
+    .markdown-content table th {
+      background: var(--toolbar-bg);
+      font-weight: 600;
+    }
+
+    .markdown-content table tr:nth-child(even) td {
+      background: var(--bg);
+    }
+
+    /* Blockquote styles */
+    .markdown-content blockquote {
+      border-left: 3px solid #1a73e8;
+      margin: 10px 0;
+      padding: 8px 14px;
+      background: var(--toolbar-bg);
+      border-radius: 0 6px 6px 0;
+      color: var(--muted);
+    }
+
+    .markdown-content hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 16px 0;
+    }
+
+    .markdown-content del {
+      text-decoration: line-through;
+      opacity: 0.7;
+    }
+
+    /* Assistant bubble max-width override for wide content */
+    .chat-bubble.assistant {
+      max-width: 95%;
     }
   </style>
 </head>
@@ -440,6 +581,7 @@
       <div class="chat-input-bar">
         <textarea id="chatInput" placeholder="Type your message..." rows="1"></textarea>
         <button id="chatSendBtn">Send</button>
+        <button id="chatCancelBtn" class="cancel-btn">Stop</button>
       </div>
     </div>
   </div>

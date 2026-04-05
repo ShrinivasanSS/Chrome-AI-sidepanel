@@ -39,6 +39,7 @@ const newChatBtn = document.getElementById('newChatBtn');
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
+const chatCancelBtn = document.getElementById('chatCancelBtn');
 
 let currentOutput = null;
 let currentMode = 'basic';
@@ -59,6 +60,7 @@ let taskResultViewMode = {};  // jobId -> 'markdown' | 'raw'
 let chatMode = 'chat'; // 'chat' or 'skill'
 let chatMessages = []; // Array of { role: 'user'|'assistant'|'system', content: string }
 let chatBusy = false;
+let chatCancelled = false;
 let pendingSkillJobId = null;
 
 document.addEventListener('DOMContentLoaded', initializeSidepanel);
@@ -82,6 +84,7 @@ async function initializeSidepanel() {
   skillModeBtn.addEventListener('click', () => switchChatMode('skill'));
   newChatBtn.addEventListener('click', handleNewChat);
   chatSendBtn.addEventListener('click', handleChatSend);
+  chatCancelBtn.addEventListener('click', handleChatCancel);
   chatInput.addEventListener('keydown', handleChatKeydown);
   chatInput.addEventListener('input', autoResizeChatInput);
 
@@ -880,7 +883,10 @@ async function handleChatSend() {
   }
 
   chatBusy = true;
+  chatCancelled = false;
   chatSendBtn.disabled = true;
+  chatSendBtn.style.display = 'none';
+  chatCancelBtn.style.display = 'inline-block';
   chatInput.value = '';
   autoResizeChatInput();
 
@@ -899,14 +905,46 @@ async function handleChatSend() {
       await sendSkillModeMessage(text);
     }
   } catch (error) {
-    console.error('[Sidepanel] Chat send failed:', error);
-    appendChatBubble('error', `Error: ${error.message}`);
+    if (!chatCancelled) {
+      console.error('[Sidepanel] Chat send failed:', error);
+      appendChatBubble('error', `Error: ${error.message}`);
+    }
   } finally {
     removeTypingIndicator();
     chatBusy = false;
+    chatCancelled = false;
     chatSendBtn.disabled = false;
+    chatSendBtn.style.display = 'inline-block';
+    chatCancelBtn.style.display = 'none';
     scrollChatToBottom();
   }
+}
+
+async function handleChatCancel() {
+  chatCancelled = true;
+
+  // If there's a pending skill job, try to cancel it
+  if (pendingSkillJobId) {
+    try {
+      await sendRuntimeMessage({ command: 'cancel-runner-job', jobId: pendingSkillJobId });
+    } catch (err) {
+      console.warn('[Sidepanel] Failed to cancel runner job:', err);
+    }
+    pendingSkillJobId = null;
+  }
+
+  // Remove the last user message if no assistant response was added yet
+  if (chatMessages.length > 0 && chatMessages[chatMessages.length - 1].role === 'user') {
+    chatMessages.pop();
+  }
+
+  removeTypingIndicator();
+  appendChatBubble('system-info', 'Cancelled.');
+  chatBusy = false;
+  chatSendBtn.disabled = false;
+  chatSendBtn.style.display = 'inline-block';
+  chatCancelBtn.style.display = 'none';
+  scrollChatToBottom();
 }
 
 async function sendChatModeMessage(userText) {
@@ -1041,7 +1079,17 @@ async function awaitSkillJobResult(jobId) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
+    if (chatCancelled) {
+      pendingSkillJobId = null;
+      return;
+    }
+
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+    if (chatCancelled) {
+      pendingSkillJobId = null;
+      return;
+    }
 
     try {
       const response = await sendRuntimeMessage({ command: 'get-runner-job', jobId });
