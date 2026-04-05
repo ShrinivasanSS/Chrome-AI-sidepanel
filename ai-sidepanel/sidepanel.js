@@ -744,6 +744,9 @@ function renderJobResultView(container, responses, rawOutput, viewMode) {
         <div class="result-content expanded markdown-content">${renderedContent}</div>
       `;
       container.appendChild(resultEl);
+      if (window.MarkdownRenderer) {
+        MarkdownRenderer.attachCodeCopyHandlers(resultEl);
+      }
     });
   }
 }
@@ -1163,6 +1166,10 @@ function renderChatMessages() {
         : escapeHtml(msg.content);
       bubble.innerHTML = `<div class="markdown-content">${rendered}</div>`;
       chatMessagesEl.appendChild(bubble);
+      // Attach copy handlers for code blocks (CSP-safe, no inline onclick)
+      if (window.MarkdownRenderer) {
+        MarkdownRenderer.attachCodeCopyHandlers(bubble);
+      }
     }
   });
 

@@ -1,5 +1,6 @@
 // Enhanced markdown renderer for AI responses
 // Provides markdown parsing with copy buttons on code blocks, tables, and blockquotes
+// CSP-safe: no inline event handlers — uses post-render attachCodeCopyHandlers()
 
 class MarkdownRenderer {
   static render(text) {
@@ -10,9 +11,31 @@ class MarkdownRenderer {
     // Escape HTML to prevent XSS
     let html = this.escapeHtml(text);
 
-    // Apply markdown transformations in order (code blocks first to protect content)
-    html = this.renderCodeBlocks(html);
-    html = this.renderInlineCode(html);
+    // Extract code blocks first and replace with placeholders to protect their content
+    const codeBlocks = [];
+    html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
+      const index = codeBlocks.length;
+      const language = lang || '';
+      const langLabel = language ? `<span class="code-lang">${language}</span>` : '';
+      const copyId = 'code-' + Date.now().toString(36) + '-' + index;
+      codeBlocks.push(
+        `<div class="code-block-wrapper">`
+        + `<div class="code-block-header">${langLabel}<button class="code-copy-btn" data-copy-target="${copyId}" title="Copy code">Copy</button></div>`
+        + `<pre id="${copyId}"><code class="language-${language}">${code.trim()}</code></pre>`
+        + `</div>`
+      );
+      return `%%CODEBLOCK_${index}%%`;
+    });
+
+    // Extract inline code and protect from further transforms
+    const inlineCodes = [];
+    html = html.replace(/`([^`]+)`/g, (match, code) => {
+      const index = inlineCodes.length;
+      inlineCodes.push(`<code class="inline-code">${code}</code>`);
+      return `%%INLINECODE_${index}%%`;
+    });
+
+    // Apply markdown transformations (code content is safe in placeholders)
     html = this.renderTables(html);
     html = this.renderHeaders(html);
     html = this.renderBold(html);
@@ -24,6 +47,16 @@ class MarkdownRenderer {
     html = this.renderLists(html);
     html = this.renderParagraphs(html);
 
+    // Restore inline code placeholders
+    inlineCodes.forEach((code, index) => {
+      html = html.replace(`%%INLINECODE_${index}%%`, code);
+    });
+
+    // Restore code block placeholders
+    codeBlocks.forEach((block, index) => {
+      html = html.replace(`%%CODEBLOCK_${index}%%`, block);
+    });
+
     return html;
   }
 
@@ -31,23 +64,6 @@ class MarkdownRenderer {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
-  }
-
-  static renderCodeBlocks(text) {
-    // Handle fenced code blocks with ``` syntax — include copy button
-    return text.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-      const language = lang || '';
-      const langLabel = language ? `<span class="code-lang">${language}</span>` : '';
-      const copyId = 'code-' + Math.random().toString(36).slice(2, 10);
-      return `<div class="code-block-wrapper">`
-        + `<div class="code-block-header">${langLabel}<button class="code-copy-btn" data-copy-target="${copyId}" onclick="MarkdownRenderer.copyCodeBlock(this)" title="Copy code">Copy</button></div>`
-        + `<pre id="${copyId}"><code class="language-${language}">${code.trim()}</code></pre>`
-        + `</div>`;
-    });
-  }
-
-  static renderInlineCode(text) {
-    return text.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
   }
 
   static renderHeaders(text) {
@@ -76,7 +92,6 @@ class MarkdownRenderer {
   }
 
   static renderBlockquotes(text) {
-    // Handle multi-line blockquotes
     const lines = text.split('\n');
     const result = [];
     let inBlockquote = false;
@@ -111,22 +126,14 @@ class MarkdownRenderer {
   }
 
   static renderLists(text) {
-    // Handle unordered lists with - or * or + syntax
     text = text.replace(/^(\s*)([-*+])\s+(.+)$/gm, '$1<li>$3</li>');
-
-    // Wrap consecutive list items in <ul> tags
     text = text.replace(/((?:<li>.*<\/li>\n?)+)/g, (match) => {
       return '<ul>' + match.trim() + '</ul>';
     });
-
-    // Handle ordered lists with 1. syntax
     text = text.replace(/^(\s*)(\d+\.)\s+(.+)$/gm, '$1<oli>$3</oli>');
-
-    // Wrap consecutive ordered list items
     text = text.replace(/((?:<oli>.*<\/oli>\n?)+)/g, (match) => {
       return '<ol>' + match.replace(/<\/?oli>/g, (tag) => tag.replace('oli', 'li')) + '</ol>';
     });
-
     return text;
   }
 
@@ -147,8 +154,7 @@ class MarkdownRenderer {
           headerDone = false;
         }
 
-        const cells = line.split('|').map(cell => cell.trim()).filter((cell, idx, arr) => idx > 0 || cell);
-        // Remove empty last element from trailing |
+        const cells = line.split('|').map(cell => cell.trim()).filter((cell, idx) => idx > 0 || cell);
         if (cells.length > 0 && cells[cells.length - 1] === '') {
           cells.pop();
         }
@@ -188,15 +194,31 @@ class MarkdownRenderer {
         para = para.trim();
         if (!para) return '';
 
-        // Don't wrap if it's already a block element
         if (para.match(/^<(h[1-6]|ul|ol|pre|blockquote|div|table|hr)/)) {
           return para;
         }
+        if (para.startsWith('%%CODEBLOCK_')) {
+          return para;
+        }
 
-        // Convert single newlines to <br> within paragraphs
         return `<p>${para.replace(/\n/g, '<br>')}</p>`;
       })
       .join('\n');
+  }
+
+  // Attach copy handlers to all code-copy-btn elements within a container
+  // Call this AFTER inserting rendered HTML into the DOM
+  static attachCodeCopyHandlers(container) {
+    if (!container) return;
+    const buttons = container.querySelectorAll('.code-copy-btn');
+    buttons.forEach((button) => {
+      // Avoid double-attaching
+      if (button.dataset.copyAttached) return;
+      button.dataset.copyAttached = 'true';
+      button.addEventListener('click', () => {
+        MarkdownRenderer.copyCodeBlock(button);
+      });
+    });
   }
 
   // Copy code block content to clipboard
@@ -207,24 +229,33 @@ class MarkdownRenderer {
 
     const text = codeEl.textContent;
     navigator.clipboard.writeText(text).then(() => {
-      const original = button.textContent;
       button.textContent = 'Copied!';
       button.classList.add('copied');
       setTimeout(() => {
-        button.textContent = original;
+        button.textContent = 'Copy';
         button.classList.remove('copied');
       }, 1500);
     }).catch(() => {
-      // Fallback
-      const range = document.createRange();
-      range.selectNodeContents(codeEl);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-      document.execCommand('copy');
-      selection.removeAllRanges();
-      button.textContent = 'Copied!';
-      setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+      // Fallback for environments where clipboard API is restricted
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        button.textContent = 'Copied!';
+        button.classList.add('copied');
+        setTimeout(() => {
+          button.textContent = 'Copy';
+          button.classList.remove('copied');
+        }, 1500);
+      } catch (e) {
+        button.textContent = 'Failed';
+        setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+      }
     });
   }
 }
