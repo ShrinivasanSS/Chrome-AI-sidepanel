@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.error import URLError, HTTPError
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs
 from urllib.request import Request, urlopen
 
 
@@ -39,6 +39,17 @@ def _normalize_cookie_domain(value: object) -> str:
     domain = domain.replace("*.", "")
     domain = domain.split("/", 1)[0]
     return domain.split(":", 1)[0]
+
+
+def _normalize_env_name(value: object, fallback: str) -> str:
+    name = _normalize_text(value).upper()
+    name = re.sub(r"[^A-Z0-9_]", "_", name)
+    name = re.sub(r"_+", "_", name).strip("_")
+    if not name:
+        name = fallback
+    if re.match(r"^[0-9]", name):
+        name = f"COOKIES_{name}"
+    return name
 
 
 def _default_cookie_env_name(domain: str) -> str:
@@ -233,7 +244,7 @@ class SkillLauncher:
         runner_input = payload.get("runnerInput") if isinstance(payload.get("runnerInput"), dict) else {}
 
         if runner_input:
-            prompt = self._build_prompt_from_runner_input(runner_input)
+            prompt = self._build_prompt_from_runner_input(runner_input, task_dir=self.tasks_root / task_id)
 
         if not prompt:
             return {"success": False, "status": "failed", "error": "Missing prompt"}
@@ -275,9 +286,35 @@ class SkillLauncher:
         # Export structured data as env vars (keeps prompt small)
         self._export_structured_env(env, runner_input, context)
 
-        # Export cookie/request header env vars for the active domain
+        # Export cookie/session env vars
         session_info = self._build_session_info(runner_input, context)
+        cookies = session_info.get("cookies")
+        if not isinstance(cookies, list):
+            cookies = []
+            session_info["cookies"] = cookies
+        env["SKILL_RUNNER_COOKIES_JSON"] = _json_dumps(cookies)
+
+        # Set SKILL_RUNNER_COOKIE_HEADER (active-tab cookie header for legacy/compat)
+        cookie_header = _normalize_text(session_info.get("cookieHeader"))
+        if cookie_header:
+            env["SKILL_RUNNER_COOKIE_HEADER"] = cookie_header
+
+        # Export active-domain env vars (SKILL_RUNNER_COOKIES, SKILL_RUNNER_REQUEST_HEADERS)
         self._export_active_domain_envs(env, session_info)
+
+        # Export per-domain cookie env vars (<DOMAIN>_COOKIES etc.)
+        self._export_domain_cookie_envs(env, session_info)
+
+        # Export standard request headers for curl/python usage
+        request_headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-GB,en;q=0.5",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+        }
+        env["SKILL_RUNNER_REQUEST_HEADERS_JSON"] = _json_dumps(request_headers)
 
         log_env = {
             key: env.get(key, "")
@@ -286,9 +323,9 @@ class SkillLauncher:
                 "SKILL_RUNNER_SKILLS_DIR",
                 "SKILL_RUNNER_WORKDIR",
                 "AGENT_SHARED_PATH",
-                "SKILL_RUNNER_ACTIVE_DOMAIN",
-                "SKILL_RUNNER_COOKIES",
-                "SKILL_RUNNER_REQUEST_HEADERS",
+                "SKILL_RUNNER_COOKIE_HEADER",
+                "SKILL_RUNNER_COOKIES_JSON",
+                "SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN",
                 "SKILL_RUNNER_SESSION_ALLOWED",
             )
         }
@@ -472,6 +509,58 @@ class SkillLauncher:
 
         env["SKILL_RUNNER_REQUEST_HEADERS"] = _json_dumps(request_headers)
 
+    def _export_domain_cookie_envs(self, env: Dict[str, str], session_info: Dict):
+        """Export per-domain cookie env vars using the cookieEnvMap from settings.
+
+        Sets for each trusted domain:
+        - <ENV_NAME> (JSON with domain, cookieHeader, cookies)
+        - <ENV_NAME>_JSON (JSON cookie array)
+        - SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN (JSON {domain: cookieHeader})
+        - SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON (JSON {domain: [cookies]})
+        """
+        headers_by_domain = session_info.get("cookieHeadersByDomain")
+        if not isinstance(headers_by_domain, dict):
+            headers_by_domain = {}
+        cookies_by_domain = session_info.get("cookiesByDomain")
+        if not isinstance(cookies_by_domain, dict):
+            cookies_by_domain = {}
+        cookie_env_map = session_info.get("cookieEnvMap")
+        if not isinstance(cookie_env_map, dict):
+            cookie_env_map = {}
+
+        normalized_env_map = {
+            _normalize_cookie_domain(key): _normalize_env_name(value, _default_cookie_env_name(_normalize_cookie_domain(key)))
+            for key, value in cookie_env_map.items()
+            if _normalize_cookie_domain(key)
+        }
+
+        normalized_headers = {}
+        normalized_cookies = {}
+        for domain, value in headers_by_domain.items():
+            key = _normalize_cookie_domain(domain)
+            if not key:
+                continue
+            normalized_headers[key] = _normalize_text(value)
+        for domain, value in cookies_by_domain.items():
+            key = _normalize_cookie_domain(domain)
+            if not key:
+                continue
+            normalized_cookies[key] = value if isinstance(value, list) else []
+
+        for domain, header in normalized_headers.items():
+            fallback = _default_cookie_env_name(domain)
+            env_name = normalized_env_map.get(domain) or _normalize_env_name(None, fallback)
+            env_payload = {
+                "domain": domain,
+                "cookieHeader": header,
+                "cookies": normalized_cookies.get(domain, []),
+            }
+            env[env_name] = _json_dumps(env_payload)
+            env[f"{env_name}_JSON"] = _json_dumps(normalized_cookies.get(domain, []))
+
+        env["SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN"] = _json_dumps(normalized_headers)
+        env["SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON"] = _json_dumps(normalized_cookies)
+
     def _export_structured_env(self, env: Dict[str, str], runner_input: Dict, context: Dict):
         """Export bulk structured data as env vars so the CLI prompt stays small."""
         if not isinstance(runner_input, dict):
@@ -532,6 +621,11 @@ class SkillLauncher:
         if agent_instructions:
             env["SKILL_RUNNER_AGENT_INSTRUCTIONS"] = agent_instructions
 
+        # Additional instructions forwarded from the extension UI
+        additional_instructions = _normalize_text(runner_input.get("additionalInstructions"))
+        if additional_instructions:
+            env["SKILL_RUNNER_ADDITIONAL_INSTRUCTIONS"] = additional_instructions
+
         # Task images list
         task_images = runner_input.get("taskImages") if isinstance(runner_input.get("taskImages"), list) else []
         if task_images:
@@ -559,6 +653,7 @@ class SkillLauncher:
                 "localStorageSnapshot": source.get("localStorageSnapshot", {}),
                 "sessionInfoAllowed": source.get("sessionInfoAllowed", False),
                 "activeDomain": source.get("activeDomain", ""),
+                "cookieEnvMap": context.get("runnerCookieEnvMap", {}),
             }
 
         session_info["url"] = session_info.get("url") or source.get("url")
@@ -584,12 +679,117 @@ class SkillLauncher:
         session_info["cookieHeader"] = _normalize_text(session_info.get("cookieHeader"))
         session_info["sessionInfoAllowed"] = bool(session_info.get("sessionInfoAllowed"))
         return session_info
+    
+    def _extract_page_context_info(self, url: str, page_text: str) -> Dict:
+        """Extract user context fields (UserID, UniqueID, timezone) from URL query params
+        and page content text. Returns a dict with any found values."""
+        info = {}
 
-    def _build_prompt_from_runner_input(self, runner_input: Dict) -> str:
+        # --- Extract from URL query parameters ---
+        if url:
+            try:
+                parsed = urlparse(url)
+                params = parse_qs(parsed.query, keep_blank_values=False)
+                # Common param names for user/account identifiers
+                for key in ("userId", "userid", "user_id", "uid", "accountId", "account_id"):
+                    if key in params:
+                        info["userId"] = params[key][0]
+                        break
+                for key in ("uniqueId", "uniqueid", "unique_id", "uuid", "sessionId", "session_id"):
+                    if key in params:
+                        info["uniqueId"] = params[key][0]
+                        break
+                for key in ("timezone", "tz", "timeZone", "time_zone"):
+                    if key in params:
+                        info["timezone"] = params[key][0]
+                        break
+            except Exception:
+                pass
+
+        # --- Extract from page text (scan for labelled values) ---
+        if page_text:
+            # UserID patterns: "User ID: 12345", "userId: abc123", "Account ID: ..."
+            if "userId" not in info:
+                m = re.search(
+                    r"(?:user\s*id|userid|account\s*id|accountid)\s*[:\-]\s*([A-Za-z0-9_@.\-]+)",
+                    page_text, re.IGNORECASE
+                )
+                if m:
+                    info["userId"] = m.group(1).strip()
+
+            # UniqueID / UUID patterns
+            if "uniqueId" not in info:
+                m = re.search(
+                    r"(?:unique\s*id|uniqueid|uuid|session\s*id|sessionid)\s*[:\-]\s*([A-Za-z0-9_\-]+)",
+                    page_text, re.IGNORECASE
+                )
+                if m:
+                    info["uniqueId"] = m.group(1).strip()
+
+            # Timezone patterns: "Timezone: Asia/Kolkata", "Time Zone: UTC+5:30"
+            if "timezone" not in info:
+                m = re.search(
+                    r"(?:time\s*zone|timezone|tz)\s*[:\-]\s*([A-Za-z0-9/_+\-:]+)",
+                    page_text, re.IGNORECASE
+                )
+                if m:
+                    info["timezone"] = m.group(1).strip()
+
+        return info
+
+    def _extract_href_info(self, page_text: str, limit: int = 10) -> str:
+        """Extract query parameters from <a href="..."> tags in page text.
+
+        Parses up to `limit` href tags, extracts each (path, param, value) triple,
+        and deduplicates by (param, value). Returns a CSV-like table string, or
+        empty string if nothing found.
+        """
+        if not page_text:
+            return ""
+
+        # Find all href values in <a href="..."> tags
+        href_pattern = re.compile(r'<a\s[^>]*href\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE)
+        hrefs = href_pattern.findall(page_text)
+
+        if not hrefs:
+            return ""
+
+        rows = []
+        seen_param_values: set = set()
+
+        for href in hrefs[:limit]:
+            try:
+                parsed = urlparse(href)
+                path = parsed.path.strip("/").split("/")[-1] if parsed.path else ""
+                if not path or not parsed.query:
+                    continue
+                params = parse_qs(parsed.query, keep_blank_values=False)
+                for param_name, values in params.items():
+                    for value in values:
+                        key = (param_name, value)
+                        if key in seen_param_values:
+                            continue
+                        seen_param_values.add(key)
+                        rows.append((path, param_name, value))
+            except Exception:
+                continue
+
+        if not rows:
+            return ""
+
+        lines = ["Link_Paths, Params, Value"]
+        for path, param, value in rows:
+            lines.append(f"{path}, {param}, {value}")
+        return "\n".join(lines)
+
+    def _build_prompt_from_runner_input(self, runner_input: Dict, task_dir: Optional[Path] = None) -> str:
         """Build an ultra-slim prompt for CLI runners (claude --print).
 
         DESIGN PRINCIPLES:
-        - Only the user's question and page content go in the prompt.
+        - Only the user's question and page content reference go in the prompt.
+        - Page content is written to a file (page-content.txt) and the file path is
+          referenced in the prompt — never embedded inline — to avoid OS command-line
+          length limits and slow runner startup.
         - Cookies, session data, metadata are in env vars only (for scripts/curl).
         - Skill names are listed so the runner knows which SKILL.md files to use.
         - Active tab origin is included so the runner knows the target domain.
@@ -643,12 +843,57 @@ class SkillLauncher:
             sections.append("Scripts in skills/ handle cookies and headers from env vars automatically.")
             sections.append("")
 
-        # Include page text if provided (this is the only bulk content in the prompt)
+        # Write page text to a file and reference the path — never embed inline
         page_text = _normalize_text(page_content.get("text"))
         if page_text:
-            if len(page_text) > 4000:
-                page_text = page_text[:4000] + "\n...(truncated)"
-            sections.extend(["Page content:", page_text, ""])
+            if task_dir is not None:
+                try:
+                    task_dir.mkdir(parents=True, exist_ok=True)
+                    page_content_file = task_dir / "page-content.txt"
+                    href_info = self._extract_href_info(page_text)
+                    if href_info:
+                        file_content = (
+                            "--- Extracted Href Parameters ---\n"
+                            + href_info
+                            + "\n--- End Extracted Href Parameters ---\n\n"
+                            + page_text
+                        )
+                    else:
+                        file_content = page_text
+                    page_content_file.write_text(file_content, encoding="utf-8")
+                    sections.append(f"Page content is available at: {page_content_file}")
+                    sections.append("Read that file to understand the current page context before answering.")
+                    sections.append("")
+                except Exception:
+                    # Fallback: embed truncated text if file write fails
+                    if len(page_text) > 4000:
+                        page_text = page_text[:4000] + "\n...(truncated)"
+                    sections.extend(["Page content:", page_text, ""])
+            else:
+                # No task dir available — embed truncated text as fallback
+                if len(page_text) > 4000:
+                    page_text = page_text[:4000] + "\n...(truncated)"
+                sections.extend(["Page content:", page_text, ""])
+
+        # Extract user context (UserID, UniqueID, timezone) from URL + page text
+        page_context = self._extract_page_context_info(source_url, page_text)
+        if page_context:
+            context_lines = ["User context extracted from page:"]
+            if page_context.get("userId"):
+                context_lines.append(f"  User ID: {page_context['userId']}")
+            if page_context.get("uniqueId"):
+                context_lines.append(f"  Unique ID: {page_context['uniqueId']}")
+            if page_context.get("timezone"):
+                context_lines.append(f"  Timezone: {page_context['timezone']}")
+            sections.extend(context_lines)
+            sections.append("")
+
+        # Additional instructions forwarded from the extension UI
+        additional_instructions = _normalize_text(runner_input.get("additionalInstructions"))
+        if additional_instructions:
+            sections.append("Additional instructions:")
+            sections.append(additional_instructions)
+            sections.append("")
 
         # The actual user task
         if task_input and task_input != user_message:

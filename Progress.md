@@ -267,6 +267,61 @@ Status:
 - Implementation completed by AI on 22/Mar/2026.
 - Human validation pending.
 
+## Date - 13/Apr/2026
+
+### AI generated updates
+
+#### README update — sync docs with implemented features
+
+Scope:
+- Reviewed all features implemented since the last README update (Apr 5–9, 2026 entries in Progress.md).
+- Updated both `README.md` (root) and `ai-sidepanel/README.md` to reflect the current state of the extension.
+
+Changes made:
+
+**Root `README.md`**
+- [x] Added "Default Chat Mode" and "Vision" checkbox to Quick Start > Configure settings steps.
+- [x] Added "Additional Instructions", "Include Screenshot", and "Default Chat Mode" bullets under Features > Chat Interface.
+- [x] Added full-page screenshot tile capture bullet to Features > Multimodal Input.
+- [x] Added page context extraction (UserID, UniqueID, timezone) bullet to Features > Skill Runner.
+
+**`ai-sidepanel/README.md`**
+- [x] Added `Additional Instructions` and `Include Screenshot` items to Current Scope > Sidepanel input toggles.
+- [x] Added `Vision` checkbox description and `Default Chat Mode` setting to the Settings section.
+- [x] Added "Additional Instructions" and "Include Screenshot" bullet points to Chat UI features section.
+- [x] Added `runnerInput.additionalInstructions` to the runner input contract list in Skill runner flow.
+- [x] Added new "Page context extraction" subsection documenting URL/page-text scanning, extracted fields, and `SKILL_RUNNER_ADDITIONAL_INSTRUCTIONS` env var behavior.
+
+Status:
+- Documentation update completed by AI on 13/Apr/2026.
+- No code changes were made.
+
+## Date - 09/Apr/2026
+
+### AI generated updates
+
+#### Proposed checklist - Additional Instructions field + Page context extraction in skill-launcher
+
+Requested change:
+- When active page content is passed from the extension, pass the loaded page URL and formatted content (not raw HTML) — already done via `pageText` field.
+- The skill-launcher should pre-process the URL and page content to extract information like UserID, UniqueID, and timezone (if present), and add these to the default instruction of the skill launcher.
+- The extension should have an additional instructions text input field, and that shall be passed along with the request info.
+- The skill launcher shall process the additional instructions from extension along with the user info.
+
+Planned work items:
+- [x] Add "Additional Instructions" textarea in `sidepanel.html` below the existing toggles in the Input Context section.
+- [x] In `sidepanel.js`, read the additional instructions field and attach to `source.additionalInstructions` before sending to service worker.
+- [x] In `service-worker.js` `buildRunnerInput()`, extract `additionalInstructions` from `source` and include it as a top-level field in the runner input payload.
+- [x] In `launcher_core.py` `_export_structured_env()`, export `SKILL_RUNNER_ADDITIONAL_INSTRUCTIONS` env var when present.
+- [x] Add `_extract_page_context_info(url, page_text)` method in `launcher_core.py` that extracts UserID, UniqueID, and timezone from URL query params and page content text using regex patterns.
+- [x] Update `_build_prompt_from_runner_input()` in `launcher_core.py` to include extracted user context (UserID, UniqueID, timezone) and additional instructions as labelled sections in the CLI prompt.
+
+Status:
+- Extension-side changes (sidepanel.html, sidepanel.js, service-worker.js) completed by AI on 09/Apr/2026.
+- launcher_core.py env var export (`SKILL_RUNNER_ADDITIONAL_INSTRUCTIONS`) completed by AI on 09/Apr/2026.
+- Code snippets for `_extract_page_context_info` and updated `_build_prompt_from_runner_input` provided to human for manual application.
+- Human validation pending.
+
 ## Date - 05/Apr/2026
 
 ### AI generated updates
@@ -325,6 +380,32 @@ Status:
 - Implementation completed by AI on 05/Apr/2026.
 - Human validation pending.
 
+## Date - 07/Apr/2026
+
+### AI generated updates
+
+#### Bug fix - Restore per-domain cookie env exports + session logging
+
+Root cause analysis:
+- The `service-worker.js` `buildRunnerInput()` function was not passing cookie data (`cookies`, `cookieHeader`, `cookiesByDomain`, `cookieHeadersByDomain`, `cookieEnvMap`) through to the launcher's `sessionInfo` object. It used a simplified `domains` structure that the launcher couldn't consume.
+- The `callSkillRunner()` function was not injecting `runnerCookieEnvMap` from settings into the context.
+- The `launcher_core.py` was missing the `_export_domain_cookie_envs()` method for per-domain env var exports, `_normalize_env_name()` helper, and the `SKILL_RUNNER_COOKIE_HEADER` / `SKILL_RUNNER_COOKIES_JSON` / `SKILL_RUNNER_REQUEST_HEADERS_JSON` env var exports.
+- Session log keys in `_run_payload` were referencing simplified env var names instead of the full set.
+
+Completed:
+- [x] Fixed `buildRunnerInput()` in `service-worker.js` to pass full cookie data (`cookies`, `cookieHeader`, `cookiesByDomain`, `cookieHeadersByDomain`, `cookieEnvMap`, `sessionStorageSnapshot`, `localStorageSnapshot`) directly on `sessionInfo`.
+- [x] Fixed `callSkillRunner()` to inject `runnerCookieEnvMap` from settings into the context before building runner input.
+- [x] Restored `_normalize_env_name()` helper in `launcher_core.py`.
+- [x] Restored `_export_domain_cookie_envs()` method that exports per-domain cookie env vars (`<DOMAIN>_COOKIES`, `<DOMAIN>_COOKIES_JSON`, `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN`, `SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON`).
+- [x] Restored `SKILL_RUNNER_COOKIE_HEADER`, `SKILL_RUNNER_COOKIES_JSON`, and `SKILL_RUNNER_REQUEST_HEADERS_JSON` env var exports in `_run_payload`.
+- [x] Updated session log keys to include cookie-related env vars.
+- [x] Updated `_build_session_info` to handle `cookieEnvMap` from context.
+- [x] Updated `ai-sidepanel/README.md` with full cookie env var documentation.
+
+Status:
+- Bug fix completed by AI on 07/Apr/2026.
+- Human validation pending.
+
 ## Date - 23/Mar/2026
 
 ### AI generated updates
@@ -338,14 +419,14 @@ Requested change:
 - Update Python scripts to consume only the two env vars.
 
 Planned work items:
-- [ ] Update extension tab capture to include per-domain request header maps (generated in-extension) alongside cookie headers.
-- [ ] Simplify runner payload/session info to drop custom cookie env map usage and include active domain + request headers.
-- [ ] Update skill-launcher to set `SKILL_RUNNER_COOKIES` and `SKILL_RUNNER_REQUEST_HEADERS` for the active domain (with safe fallbacks) and remove per-domain env exports.
-- [ ] Update skill scripts (e.g., `site24x7_client.py`) to read only `SKILL_RUNNER_COOKIES` and `SKILL_RUNNER_REQUEST_HEADERS`.
-- [ ] Refresh documentation in `ai-sidepanel/README.md` and `skill-launcher/README.md`, and add findings to `Agent-Notes.md`.
+- [x] Update extension tab capture to include per-domain request header maps (generated in-extension) alongside cookie headers.
+- [x] Simplify runner payload/session info to drop custom cookie env map usage and include active domain + request headers.
+- [x] Update skill-launcher to set `SKILL_RUNNER_COOKIES` and `SKILL_RUNNER_REQUEST_HEADERS` for the active domain (with safe fallbacks) — kept alongside per-domain env exports for backward compatibility.
+- [x] Update skill scripts (e.g., `site24x7_client.py`) to read only `SKILL_RUNNER_COOKIES` and `SKILL_RUNNER_REQUEST_HEADERS`.
+- [x] Refresh documentation in `ai-sidepanel/README.md` and `skill-launcher/README.md`, and add findings to `Agent-Notes.md`.
 
 Status:
-- Planned; awaiting human review before implementation.
+- Implementation completed. Both simplified active-domain vars and per-domain env exports are now available.
 
 #### Follow-up update - UI task/history split + formatted/raw views
 

@@ -8,6 +8,7 @@ const modelSelectEl = document.getElementById('modelSelect');
 const developerControls = document.getElementById('developerControls');
 const includeTabContentToggle = document.getElementById('includeTabContentToggle');
 const includeSessionInfoToggle = document.getElementById('includeSessionInfoToggle');
+const additionalInstructionsEl = document.getElementById('additionalInstructions');
 const historyListEl = document.getElementById('historyList');
 const historyUsageEl = document.getElementById('historyUsage');
 const tasksListEl = document.getElementById('tasksList');
@@ -1019,6 +1020,9 @@ async function sendSkillModeMessage(userText) {
   // Build concatenated context string for skill mode
   const contextString = buildSkillContextString();
 
+  // Read additional instructions from the UI field
+  const additionalInstructions = additionalInstructionsEl ? additionalInstructionsEl.value.trim() : '';
+
   // Build source with tab info if enabled
   let source = { type: 'sidepanel-chat-skill' };
   if (includeTabContent || includeSessionInfo) {
@@ -1046,6 +1050,11 @@ async function sendSkillModeMessage(userText) {
     } catch (err) {
       console.warn('[Sidepanel] Could not capture tab for skill context:', err);
     }
+  }
+
+  // Attach additional instructions to source so service worker can forward them
+  if (additionalInstructions) {
+    source.additionalInstructions = additionalInstructions;
   }
 
   const response = await sendRuntimeMessage({

@@ -14,6 +14,8 @@ Chrome side panel extension for sending structured and multimodal requests to an
 - Sidepanel input toggle for Chat/Advanced:
   - `Include Active Tab Content` (default: off)
   - `Include Cookies/Session` (default: on, trusted domains only)
+  - `Additional Instructions` free-text field for per-request guidance forwarded to the runner
+  - `Include Screenshot` button (visible when selected model is vision-capable): captures visible tab as 1280x720 tiles
 - Sidepanel activity area has toggleable views:
   - `Current Tasks` (skill-runner queue + timers + expandable results)
   - `History` (stored conversation history)
@@ -44,8 +46,9 @@ Open the extension options page and configure:
 - `Runner Cookie Env Mapping` (`domain=ENV_VAR`, auto-default generated when omitted)
 - `API Base URL`
 - `API Key`
-- One or more model entries
+- One or more model entries (each entry has a `label`, `value`, and optional `Vision` checkbox to mark vision-capable models)
 - `Default Model`
+- `Default Chat Mode` (`Chat` or `Skill`)
 - Skills configuration:
   - `Repository Base URL` (directory listing containing `*.skill` files)
   - Enable/disable repository source
@@ -133,6 +136,8 @@ The Basic tab now shows a chat-style interface instead of a simple textarea. Use
 - **Mode toggle**: Chat/Skill toggle persisted in `chrome.storage.local`.
 - **Default mode**: Configurable in Settings page (`Default Chat Mode` dropdown).
 - **Typing indicator**: Shows "Thinking..." or "Running skill..." while waiting for response.
+- **Additional Instructions**: A free-text field below the tab-content/cookie toggles. Content is forwarded to the skill launcher as `SKILL_RUNNER_ADDITIONAL_INSTRUCTIONS` (env var) and also injected into the CLI prompt, allowing per-request guidance without editing skill definitions.
+- **Include Screenshot**: Shown only when the currently selected model has the `Vision` flag set in settings. Clicking it captures the visible tab via `chrome.tabs.captureVisibleTab()`, splits the result into 1280×720 tiles using an offscreen canvas, and stores the base64 tiles. The tiles are sent as `image_url` content blocks in the user message (Chat mode). Re-capture is triggered automatically when the active tab URL changes.
 
 ## Supported request formats
 
@@ -249,6 +254,7 @@ For sidepanel Basic and Advanced modes:
   - `runnerInput.pageContent` (page text/headings/meta/links when enabled)
   - `runnerInput.activeTabInfo` (active tab metadata in separate JSON field)
   - `runnerInput.request` + `runnerInput.source` metadata
+  - `runnerInput.additionalInstructions` (from the Additional Instructions field in the sidepanel)
 - Extension no longer builds a monolithic runner prompt string in skill-runner mode.
 - Host payload includes:
   - `runner` (`claude`, `copilot`, `cursor`)
@@ -257,8 +263,14 @@ For sidepanel Basic and Advanced modes:
   - optional context metadata
 - Skill launcher builds the final CLI prompt from `runnerInput` and injects session-aware usage guidance.
 - Runner process env includes:
-  - `SKILL_RUNNER_COOKIES` (cookie header string for the active domain)
-  - `SKILL_RUNNER_REQUEST_HEADERS` (JSON object with browser request headers)
+  - `SKILL_RUNNER_COOKIE_HEADER` — active-tab cookie header string
+  - `SKILL_RUNNER_COOKIES_JSON` — active-tab cookie array
+  - `SKILL_RUNNER_COOKIES` — cookie header string for the active domain
+  - `SKILL_RUNNER_COOKIE_HEADERS_BY_DOMAIN` — JSON `{domain: cookieHeader}`
+  - `SKILL_RUNNER_COOKIES_BY_DOMAIN_JSON` — JSON `{domain: [cookies]}`
+  - `<DOMAIN>_COOKIES` / `<DOMAIN>_COOKIES_JSON` — per-domain cookie data (env name from settings or auto-generated)
+  - `SKILL_RUNNER_REQUEST_HEADERS` — JSON object with browser request headers for the active domain
+  - `SKILL_RUNNER_REQUEST_HEADERS_JSON` — JSON object with standard request headers
 - Local runner mode:
   - uses `chrome.runtime.sendNativeMessage(...)`
   - requires an installed Native Messaging host that launches the actual CLI binary
@@ -277,6 +289,16 @@ Reference implementation:
 
 Skill sync trigger behavior:
 - On `Save Settings` and `Refresh Skills` in extension settings, backend launcher `update-skills` is also invoked so runner-local skills are refreshed immediately.
+
+### Page context extraction
+
+The skill launcher automatically scans the active tab URL query parameters and page text for identifiers before building the CLI prompt:
+
+- **URL query params checked**: `userId`, `uid`, `accountId`, `uniqueId`, `uuid`, `sessionId`, `timezone`, `tz`
+- **Page text patterns**: labelled values such as `User ID: 12345` or `Timezone: Asia/Kolkata`
+- Extracted values (UserID, UniqueID, timezone) are injected as a `User context extracted from page:` block in the CLI prompt, immediately before the user's task/message.
+- If no values are found the block is omitted entirely.
+- `SKILL_RUNNER_ADDITIONAL_INSTRUCTIONS` is exported as an env var and also appended to the prompt when the field is non-empty.
 
 ## Local storage
 

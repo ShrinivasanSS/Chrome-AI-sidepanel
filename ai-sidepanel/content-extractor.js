@@ -54,11 +54,26 @@
     }
     
     // Clean up the text
-    return mainText
+    // return mainText
+    //   .replace(/\s+/g, ' ')
+    //   .replace(/\n\s*\n/g, '\n')
+    //   .trim()
+    //   .substring(0, 5000); // Limit to 5000 characters
+    // Clean up the text
+    let cleanedText = mainText
       .replace(/\s+/g, ' ')
       .replace(/\n\s*\n/g, '\n')
       .trim()
       .substring(0, 5000); // Limit to 5000 characters
+
+    // Append raw <a href> tags with query params for launcher href extraction
+    const hrefTags = extractHrefParams(10);
+    if (hrefTags.length > 0) {
+      cleanedText += '\n\n--- Page Href Tags ---\n' + hrefTags.join('\n') + '\n--- End Page Href Tags ---';
+    }
+
+    return cleanedText;
+
   }
 
   // Extract headings for structure
@@ -125,6 +140,60 @@
     
     return links.slice(0, 10); // Limit to 10 links
   }
+
+  // NEW FUNCTION — Add after extractLinks() (around line 127)
+
+  // Extract raw <a href> tags that contain query parameters
+  // so the skill launcher can parse path/param/value triples
+  function extractHrefParams(limit) {
+    limit = limit || 10;
+    const linkElements = document.querySelectorAll('a[href]');
+    const hrefTags = [];
+    const seenParamValues = new Set();
+    let processed = 0;
+
+    for (let i = 0; i < linkElements.length && processed < limit; i++) {
+      const link = linkElements[i];
+      const href = link.getAttribute('href');
+      if (!href || href.startsWith('#') || href.startsWith('javascript:')) {
+        continue;
+      }
+
+      // Only process hrefs that have query parameters
+      const qIndex = href.indexOf('?');
+      if (qIndex < 0) {
+        continue;
+      }
+
+      try {
+        // Parse query params from the href
+        const queryString = href.substring(qIndex + 1);
+        const params = new URLSearchParams(queryString);
+        let hasNewParam = false;
+
+        for (const [key, value] of params.entries()) {
+          const dedupeKey = key + '=' + value;
+          if (!seenParamValues.has(dedupeKey)) {
+            hasNewParam = true;
+            seenParamValues.add(dedupeKey);
+          }
+        }
+
+        // Only include this href if it has at least one new (param, value) pair
+        if (hasNewParam) {
+          // Emit as a raw <a href="..."> tag so the launcher regex can parse it
+          hrefTags.push('<a href="' + href + '">link</a>');
+          processed++;
+        }
+      } catch (e) {
+        // Skip malformed hrefs
+        continue;
+      }
+    }
+
+    return hrefTags;
+  }
+
 
   // Main extraction function
   function snapshotStorage(storageObject, maxItems, maxValueLength) {

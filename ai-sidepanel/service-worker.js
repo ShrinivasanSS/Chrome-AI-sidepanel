@@ -887,6 +887,9 @@ function buildRunnerInput(agentPrompt, task, context) {
   const cookieHeadersByDomain = source.cookieHeadersByDomain && typeof source.cookieHeadersByDomain === 'object'
     ? source.cookieHeadersByDomain
     : {};
+  const cookiesByDomain = source.cookiesByDomain && typeof source.cookiesByDomain === 'object'
+    ? source.cookiesByDomain
+    : {};
   const taskImages = Array.isArray(task && task.images) ? task.images : [];
 
   // Derive activeDomain from source URL
@@ -897,25 +900,19 @@ function buildRunnerInput(agentPrompt, task, context) {
     }
   } catch (e) { /* ignore */ }
 
-  // Build browser request headers from actual browser values
-  const requestHeaders = {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': (typeof navigator !== 'undefined' && navigator.language) || 'en-US',
-    'User-Agent': (typeof navigator !== 'undefined' && navigator.userAgent) || '',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none'
-  };
-  const requestHeadersJson = JSON.stringify(requestHeaders);
+  // Active-tab cookie header (for the current tab's domain)
+  const cookieHeader = source.cookieHeader || '';
+  const cookies = Array.isArray(source.cookies) ? source.cookies : [];
 
-  // Build per-domain env variables: { domain: { SKILL_RUNNER_COOKIES, SKILL_RUNNER_REQUEST_HEADERS } }
-  const domains = {};
-  Object.keys(cookieHeadersByDomain).forEach((domain) => {
-    domains[domain] = {
-      SKILL_RUNNER_COOKIES: cookieHeadersByDomain[domain] || '',
-      SKILL_RUNNER_REQUEST_HEADERS: requestHeadersJson
-    };
-  });
+  // Resolve runnerCookieEnvMap from context (passed from settings)
+  const runnerCookieEnvMap = safeContext.runnerCookieEnvMap && typeof safeContext.runnerCookieEnvMap === 'object'
+    ? safeContext.runnerCookieEnvMap
+    : {};
+
+  // Additional instructions from the extension UI (forwarded as-is to launcher)
+  const additionalInstructions = typeof source.additionalInstructions === 'string'
+    ? source.additionalInstructions.trim()
+    : '';
 
   return {
     request: {
@@ -924,6 +921,7 @@ function buildRunnerInput(agentPrompt, task, context) {
       model: safeContext.model || 'unknown'
     },
     agentInstructions: agentPrompt || '',
+    additionalInstructions,
     userMessage: task && typeof task.input === 'string' ? task.input : '',
     taskInput: task && typeof task.input === 'string' ? task.input : '',
     normalizedTaskText: task && typeof task.input === 'string' ? task.input : '',
@@ -949,7 +947,15 @@ function buildRunnerInput(agentPrompt, task, context) {
     },
     sessionInfo: {
       activeDomain,
-      domains,
+      url: source.url || '',
+      title: source.title || '',
+      cookies,
+      cookieHeader,
+      cookiesByDomain,
+      cookieHeadersByDomain,
+      cookieEnvMap: runnerCookieEnvMap,
+      sessionStorageSnapshot: source.sessionStorageSnapshot || {},
+      localStorageSnapshot: source.localStorageSnapshot || {},
       sessionInfoAllowed: !!source.sessionInfoAllowed
     }
   };
@@ -957,13 +963,18 @@ function buildRunnerInput(agentPrompt, task, context) {
 
 async function callSkillRunner(settings, agentPrompt, task, context) {
   const runnerConfig = settings.runnerConfig || {};
-  const runnerInput = buildRunnerInput(agentPrompt, task, context || {});
+  // Inject runnerCookieEnvMap from settings into context so buildRunnerInput can forward it
+  const enrichedContext = {
+    ...(context || {}),
+    runnerCookieEnvMap: settings.runnerCookieEnvMap || {}
+  };
+  const runnerInput = buildRunnerInput(agentPrompt, task, enrichedContext);
 
   if (runnerConfig.runnerMode === 'local') {
-    return invokeLocalRunner(runnerConfig, runnerInput, context || {});
+    return invokeLocalRunner(runnerConfig, runnerInput, enrichedContext);
   }
 
-  return invokeRemoteRunner(runnerConfig, runnerInput, context || {});
+  return invokeRemoteRunner(runnerConfig, runnerInput, enrichedContext);
 }
 
 function getRunnerPromptArg(runnerType) {

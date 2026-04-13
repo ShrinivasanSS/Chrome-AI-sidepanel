@@ -1,102 +1,127 @@
-# Chrome-AI-sidepanel
-A Chrome extension side panel that provides AI-powered functionality for web browsing.
+# Chrome AI Side Panel
 
-## Overview
-This project contains a Chrome extension side panel developed entirely by Codex. The extension integrates AI capabilities with Chrome's browser environment, enabling users to perform advanced operations directly within their browser.
+A Chrome extension that adds an AI-powered side panel to your browser. It connects to any OpenAI-compatible backend and supports chat conversations, multimodal inputs (text, images, ZIP archives), skill-based automation, and external page integration.
 
-## Components and Features
+## Project Structure
 
-### Core Components
-1. **Side Panel UI** (`ai-sidepanel/sidepanel.html`, `ai-sidepanel/sidepanel.js`)
-   - The visual interface displayed as a side panel in Chrome
-   - Handles user interactions and presents AI responses
-   - Displays input/output areas, processing status, and results
+```
+ai-sidepanel/          Chrome extension source (Manifest V3)
+skill-launcher/        Backend app for skill-runner CLI execution
+tests/                 Docker-based test harness (vanilla HTML + JSP demos)
+assets/                Screenshots for documentation
+```
 
-2. **Content Extraction Script** (`ai-sidepanel/content-extractor.js`)
-   - Extracts relevant content from web pages
-   - Identifies and processes document elements
-   - Handles HTML parsing and content normalization
+| Component | Description |
+|-----------|-------------|
+| **[ai-sidepanel/](ai-sidepanel/README.md)** | The Chrome extension — side panel UI, service worker, content scripts, settings, storage, skills engine |
+| **[skill-launcher/](skill-launcher/README.md)** | Python backend that receives runner payloads from the extension and executes CLI tools (Claude, Copilot, Cursor) |
+| **[tests/](tests/Tests.md)** | Docker Compose test harness with vanilla HTML and JSP sample apps |
 
-3. **API Content Script** (`ai-sidepanel/api-content-script.js`)
-   - Injects scripts into web pages for enhanced analysis
-   - Handles dynamic content loading and processing
-   - Manages API interactions with the page
+## Quick Start
 
-4. **Request Normalization** (`ai-sidepanel/request-normalizer.js`)
-   - Standardizes user inputs before processing
-   - Converts various input formats to consistent format
-   - Handles special cases and edge conditions
+### 1. Install the extension
 
-5. **Storage Utilities** (`ai-sidepanel/storage-utils.js`)
-   - Manages local storage for user data
-   - Handles session persistence between requests
-   - Provides secure storage options
+1. Open `chrome://extensions/`
+2. Enable **Developer mode** (toggle in top-right)
+3. Click **Load unpacked**
+4. Select the `ai-sidepanel` folder
 
-6. **Markdown Renderer** (`ai-sidepanel/markdown-renderer.js`)
-   - Converts AI-generated responses to formatted markdown
-   - Handles rich text formatting in responses
-   - Supports code blocks and special formatting
+### 2. Configure settings
 
-7. **History Store** (`ai-sidepanel/history-store.js`)
-   - Tracks user interactions and session history
-   - Maintains conversation history between requests
-   - Provides searchable history functionality
+1. Right-click the extension icon → **Options** (or open `chrome://extensions` → extension details → Extension options)
+2. Set your **API Base URL** and **API Key** for an OpenAI-compatible endpoint
+3. Add one or more **models** (mark vision-capable models with the **Vision** checkbox) and select a default
+4. Set the **Default Chat Mode** (Chat or Skill)
+5. Save settings
 
-8. **Service Worker** (`ai-sidepanel/service-worker.js`)
-   - Handles background operations and caching
-   - Manages offline functionality
-   - Provides background service capabilities
+### 3. Use the side panel
 
-9. **Settings Management** (`ai-sidepanel/settings.html`, `ai-sidepanel/settings.js`)
-   - Allows user configuration of extension settings
-   - Manages preferences and options
-   - Provides configuration persistence
+1. Click the extension icon in the toolbar to open the side panel
+2. Type a message in the chat input and press Enter
+3. The extension sends your message to the configured API and displays the response
 
-10. **Image Processing** (`ai-sidepanel/images/`)
-    - Contains icon assets for extension
-    - Provides visual branding assets
-    - Supports multiple resolution icons
+## Features
 
-#### Screenshots Documentation
+### Chat Interface
+The primary interface is a chat window in the side panel. Two modes are available:
 
-##### Screenshots
-**Assets Directory (`assets/`)**
-Example screenshots for testing and documentation within the extension development workflow.
+- **Chat mode** (default) — Multi-turn conversation sent as an OpenAI-compatible `messages` array. Works like a standard chatbot.
+- **Skill mode** — Routes messages through a skill runner (Claude, Copilot, or Cursor CLI) with accumulated conversation context.
 
-- ![Test 01](assets/ai-sidepanel-test-01.png)
-- ![Test 02](assets/ai-sidepanel-test-02.png)
-- ![Test 03](assets/ai-sidepanel-test-03.png)
-- ![Test 04](assets/ai-sidepanel-test-04.png)
+Additional sidepanel features:
+- **Default Chat Mode** — Configurable in Settings (Chat or Skill). Persisted in extension storage.
+- **Additional Instructions** — A free-text field in the sidepanel forwarded to the skill launcher as `SKILL_RUNNER_ADDITIONAL_INSTRUCTIONS` and injected into the CLI prompt, letting users add per-request guidance without modifying skill definitions.
+- **Include Screenshot** — Visible when the selected model is marked vision-capable in settings. Captures the visible tab as 1280×720 tiles and attaches them as `image_url` content blocks. Re-captures only when the active tab URL changes.
 
-**Purpose:**
-Example screenshots for testing and documentation within the extension development workflow.
+### Extension Modes
+- **Developer mode** — Shows Basic (Chat), Advanced, and API tabs
+- **User mode** — Shows only the chat interface with settings and history access
 
-### Technical Implementation
+### Multimodal Input
+- Text prompts
+- Base64/data-URL image payloads
+- ZIP archives containing JSON, text, and image files
+- Optional active-tab page content and screenshots
+- Full-page screenshot capture (split into 1280×720 tiles) when the selected model is vision-capable
 
-- **Manifest V3**: Uses modern Chrome extension manifest format
-- **Content Scripts**: Injects scripts into web pages for content processing
-- **Background Scripts**: Handles background operations and state management
-- **Local Storage**: Uses Chrome's storage API for data persistence
-- **AI Integration**: Compatible with an OpenAI-compatible server for processing
-- **Testing Framework**: Includes test applications for functionality verification
+### Skills
+- Skills are loaded from a configured repository URL (directory of `.skill` ZIP packages)
+- Each package contains a `SKILL.md` with metadata and instructions
+- Skills are periodically refreshed and can be enabled/disabled individually in settings
+- Selected skills are injected into the system prompt during API calls
 
-### Example Functionality
-- Extract content from web pages and process it with AI
-- Answer questions about extracted content
-- Analyze and summarize web pages
-- Generate code snippets from page content
-- Handle image processing and analysis
-- Manage conversation history across sessions
+### Skill Runner
+- Bypass the API and route requests to a local or remote CLI runner (Claude, Copilot, Cursor)
+- Requests are queued with status tracking (queued → running → completed/failed/timed_out)
+- The [skill-launcher](skill-launcher/README.md) backend handles execution and skill sync
+- Launcher extracts page context from the active tab URL and page text (UserID, UniqueID, timezone) and injects extracted values into the CLI prompt automatically
 
-## Installation and Usage
-1. Install the extension from Chrome Web Store or build locally
-2. Enable the extension in Chrome browser
-3. Access the side panel by clicking the extension icon in the toolbar
-4. Use the interface to interact with web pages and AI capabilities
+### External Page Integration
+Any web page can trigger the extension via a custom DOM event:
+
+```js
+document.dispatchEvent(new CustomEvent('ai-sidepanel-api-call', {
+  detail: requestObject
+}));
+```
+
+Results are dispatched back as `ai-sidepanel-response` and `ai-sidepanel-status` events.
+
+### Storage
+- **IndexedDB** — Conversation history (input/output)
+- **chrome.storage.local** — Settings, extension mode, skills state, queue state
+- Storage usage is displayed in settings with a **Clean Storage** action
+
+## Screenshots
+
+![Side panel chat](assets/ai-sidepanel-test-01.png)
+![Settings page](assets/ai-sidepanel-test-02.png)
+![Advanced mode](assets/ai-sidepanel-test-03.png)
+![API integration](assets/ai-sidepanel-test-04.png)
+
+## Testing
+
+A Docker Compose harness is provided under `tests/`. See [tests/Tests.md](tests/Tests.md) for details.
+
+```bash
+docker compose -f tests/docker-compose.yml up --build
+# Open http://localhost:9090/
+```
+
+## Documentation
+
+- [Extension detailed docs](ai-sidepanel/README.md) — Settings, request formats, chat modes, skill runner flow, storage
+- [Skill Launcher docs](skill-launcher/README.md) — Remote/native modes, env vars, task APIs, verbose logging
+- [Test plan](tests/Tests.md) — Compose harness, vanilla HTML and JSP test pages
+- [Progress log](Progress.md) — Feature implementation history
+- [Agent notes](Agent-Notes.md) — AI-generated implementation findings and constraints
 
 ## Contributing
-Contributions are welcome! Please review the `Todo.md` file for current open tasks and feature requests.
 
-The project was inspired by [Chrome Extension samples](https://github.com/GoogleChrome/chrome-extensions-samples) especially [Sidepanel Example](https://github.com/GoogleChrome/chrome-extensions-samples/tree/main/functional-samples/cookbook.sidepanel-global)
+Contributions are welcome. See `Todo.md` for open items and `Progress.md` for implementation history.
 
-(Generated by Codex)
+The project was inspired by [Chrome Extension Samples](https://github.com/GoogleChrome/chrome-extensions-samples), especially the [sidepanel-global](https://github.com/GoogleChrome/chrome-extensions-samples/tree/main/functional-samples/cookbook.sidepanel-global) example.
+
+## License
+
+See [LICENSE](LICENSE).
