@@ -65,6 +65,8 @@ let chatMessages = []; // Array of { role: 'user'|'assistant'|'system', content:
 let chatBusy = false;
 let chatCancelled = false;
 let pendingSkillJobId = null;
+let currentTabId = null; // For tab-wise chat isolation
+let sidePanelMode = 'global'; // 'global' or 'tab'
 
 document.addEventListener('DOMContentLoaded', initializeSidepanel);
 
@@ -74,7 +76,7 @@ async function initializeSidepanel() {
   copyBtn.addEventListener('click', handleCopy);
   refreshHistoryBtn.addEventListener('click', refreshActivityPanels);
   tasksViewBtn.addEventListener('click', () => switchActivityView('tasks'));
-  historyViewBtn.addEventListener('click', () => switchActivityView('history'));
+  historyViewBtn.addEventListener('click', openHistoryPage);
 
   basicModeBtn.addEventListener('click', () => switchMode('basic'));
   advancedModeBtn.addEventListener('click', () => switchMode('advanced'));
@@ -95,6 +97,7 @@ async function initializeSidepanel() {
 
   currentSettings = await StorageUtils.loadSettings();
   extensionMode = currentSettings.extensionMode || 'developer';
+  sidePanelMode = currentSettings.sidePanelMode || 'global';
   applyTheme(currentSettings.theme || 'light');
   applyExtensionMode(extensionMode);
   renderModelOptions(currentSettings);
@@ -102,6 +105,20 @@ async function initializeSidepanel() {
   await loadChatMode();
   await loadMode();
   await loadApiSession();
+
+  // Detect current tab for tab-wise chat isolation
+  if (sidePanelMode === 'tab') {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id) {
+        currentTabId = tab.id;
+      }
+    } catch (err) {
+      console.warn('[Sidepanel] Could not detect current tab:', err);
+    }
+    await loadTabChatMessages();
+  }
+
   switchActivityView('tasks');
   await refreshActivityPanels();
   jobsPollHandle = setInterval(refreshRunnerJobs, 2000);
@@ -871,6 +888,7 @@ function handleNewChat() {
   chatSendBtn.disabled = false;
   chatInput.value = '';
   renderChatMessages();
+  saveTabChatMessages();
 }
 
 function handleChatKeydown(event) {
@@ -1014,6 +1032,7 @@ async function sendChatModeMessage(userText) {
   const reply = response.reply || '';
   chatMessages.push({ role: 'assistant', content: reply });
   renderChatMessages();
+  saveTabChatMessages();
 }
 
 async function sendSkillModeMessage(userText) {
@@ -1083,6 +1102,7 @@ async function sendSkillModeMessage(userText) {
   const reply = response.reply || '';
   chatMessages.push({ role: 'assistant', content: reply });
   renderChatMessages();
+  saveTabChatMessages();
 }
 
 function buildSkillContextString() {
@@ -1136,6 +1156,7 @@ async function awaitSkillJobResult(jobId) {
         removeTypingIndicator();
         renderChatMessages();
         scrollChatToBottom();
+        saveTabChatMessages();
         chatBusy = false;
         chatSendBtn.disabled = false;
         pendingSkillJobId = null;
@@ -1329,4 +1350,41 @@ function buildUserMessageWithScreenshot(textContent, tiles) {
     });
   });
   return { role: 'user', content };
+}
+
+// ─── Tab-wise Chat Persistence ──────────────────────────────────────────────
+
+async function loadTabChatMessages() {
+  if (sidePanelMode !== 'tab' || !currentTabId) {
+    return;
+  }
+  try {
+    const key = `chatMessages_${currentTabId}`;
+    const result = await chrome.storage.local.get([key]);
+    const stored = result[key];
+    if (Array.isArray(stored)) {
+      chatMessages = stored;
+      renderChatMessages();
+    }
+  } catch (err) {
+    console.warn('[Sidepanel] Could not load tab chat messages:', err);
+  }
+}
+
+async function saveTabChatMessages() {
+  if (sidePanelMode !== 'tab' || !currentTabId) {
+    return;
+  }
+  try {
+    const key = `chatMessages_${currentTabId}`;
+    await chrome.storage.local.set({ [key]: chatMessages });
+  } catch (err) {
+    console.warn('[Sidepanel] Could not save tab chat messages:', err);
+  }
+}
+
+// ─── History Page Navigation ────────────────────────────────────────────────
+
+function openHistoryPage() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('history.html') });
 }

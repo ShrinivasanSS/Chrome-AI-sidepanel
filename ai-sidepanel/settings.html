@@ -278,6 +278,14 @@
           <div class="help-text">Developer mode shows Basic/Advanced/API tabs. User mode only shows basic chat/query with settings/history.</div>
         </div>
         <div class="form-group">
+          <label for="sidePanelMode">Side Panel Mode</label>
+          <select id="sidePanelMode">
+            <option value="global">Global (shared across all tabs)</option>
+            <option value="tab">Tab-wise (separate panel per tab)</option>
+          </select>
+          <div class="help-text">Global mode shares one side panel across all tabs. Tab-wise mode gives each tab its own independent side panel with separate chat history.</div>
+        </div>
+        <div class="form-group">
           <label for="defaultChatMode">Default Chat Mode</label>
           <select id="defaultChatMode">
             <option value="chat">Chat (OpenAI-compatible multi-turn)</option>

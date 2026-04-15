@@ -18,9 +18,16 @@ from urllib.request import Request, urlopen
 
 DEFAULT_RUNNER_COMMANDS = {
     "claude": ["claude", "--dangerously-skip-permissions","--print", "{prompt}"],
-    "copilot": ["copilot", "--prompt", "{prompt}"],
+    "copilot": ["copilot", "--yolo", "{prompt}"],
     "cursor": ["agent", "-p", "{prompt}"],
-    "cline": ["cline", "-v", "task", "{prompt}"],
+    "cline": ["cline", "-v", "--yolo", "{prompt}"],
+}
+
+# Continue commands for runners that support task resumption.
+# {taskId} is replaced with the task ID extracted from the first run's output.
+# Only runners listed here support continuation; others always launch fresh.
+DEFAULT_RUNNER_CONTINUE_COMMANDS = {
+    "cline": ["cline", "-v", "--yolo", "-T", "{taskId}", "{prompt}"],
 }
 
 
@@ -75,6 +82,7 @@ class SkillLauncher:
         self.tasks_root.mkdir(parents=True, exist_ok=True)
 
         self.runner_commands = dict(DEFAULT_RUNNER_COMMANDS)
+        self.runner_continue_commands = dict(DEFAULT_RUNNER_CONTINUE_COMMANDS)
         self.verbose = bool(verbose)
         self.log_file = log_file.resolve() if log_file else (self.launcher_root / "skill-launcher.log")
         if runner_commands:
@@ -261,7 +269,23 @@ class SkillLauncher:
         prompt_file.write_text(prompt, encoding="utf-8")
 
         sync_summary = self._sync_skills_cached(skills_config, runner)
-        command = self._build_command(runner, prompt_arg, prompt)
+
+        # Check if this is a continuation of a previous runner task
+        continue_task_id = _normalize_text(payload.get("continueTaskId"))
+        if continue_task_id and self._supports_continuation(runner):
+            continue_cmd = self._build_continue_command(runner, prompt_arg, prompt, continue_task_id)
+            if continue_cmd:
+                command = continue_cmd
+                self._log("runner_continuation", {
+                    "taskId": task_id,
+                    "continueTaskId": continue_task_id,
+                    "runner": runner,
+                    "command": continue_cmd,
+                })
+            else:
+                command = self._build_command(runner, prompt_arg, prompt)
+        else:
+            command = self._build_command(runner, prompt_arg, prompt)
         skills_dir = self._runner_skills_dir(runner)
         shared_dir = self._runner_shared_dir(runner)
         command_file.write_text(json.dumps({
@@ -375,6 +399,9 @@ class SkillLauncher:
                 self._log("runner_exit_nonzero", payload)
                 return payload
 
+            # Extract runner task ID for continuation support
+            extracted_task_id = self._extract_runner_task_id(stdout, runner)
+
             success_payload = {
                 "success": True,
                 "status": "completed",
@@ -387,6 +414,7 @@ class SkillLauncher:
                 "outputFile": str(stdout_file if stdout else stderr_file),
                 "resultFile": str(result_file),
                 "launchCommandFile": str(command_file),
+                "runnerTaskId": extracted_task_id,
             }
             result_file.write_text(json.dumps(success_payload, indent=2), encoding="utf-8")
             self._log("runner_exit_success", success_payload)
@@ -1012,6 +1040,62 @@ class SkillLauncher:
             "prompt": prompt,
         }
         return [part.format(**variables) for part in template]
+
+    def _build_continue_command(self, runner: str, prompt_arg: str, prompt: str, task_id: str) -> Optional[List[str]]:
+        """Build a continue command for runners that support task resumption.
+
+        Returns None if the runner does not have a continue command template.
+        """
+        runner_key = runner.lower()
+        template = self.runner_continue_commands.get(runner_key)
+        if not template:
+            return None
+
+        variables = {
+            "promptArg": prompt_arg,
+            "prompt": prompt,
+            "taskId": task_id,
+        }
+        try:
+            return [part.format(**variables) for part in template]
+        except (KeyError, IndexError):
+            return None
+
+    @staticmethod
+    def _extract_runner_task_id(stdout: str, runner: str) -> Optional[str]:
+        """Extract a runner task ID from the first output of a CLI runner.
+
+        For Cline, the task ID is typically the first non-empty line of stdout.
+        The format may be a bare UUID/ID or prefixed like "Task ID: xxx".
+        """
+        if not stdout:
+            return None
+
+        runner_key = runner.lower()
+        lines = [line.strip() for line in stdout.strip().splitlines() if line.strip()]
+        if not lines:
+            return None
+
+        if runner_key == "cline":
+            first_line = lines[0]
+            # Check for "Task ID: <id>" pattern
+            m = re.match(r"(?:task\s*id\s*[:\-]\s*)(.+)", first_line, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+            # If first line looks like a bare ID (alphanumeric, hyphens, underscores)
+            if re.match(r"^[A-Za-z0-9_\-]{4,}$", first_line):
+                return first_line
+            # Fallback: scan first few lines for a task ID pattern
+            for line in lines[:5]:
+                m = re.search(r"(?:task[_\-\s]*id\s*[:\-=]\s*)([A-Za-z0-9_\-]+)", line, re.IGNORECASE)
+                if m:
+                    return m.group(1).strip()
+
+        return None
+
+    def _supports_continuation(self, runner: str) -> bool:
+        """Check if a runner has a continue command template."""
+        return runner.lower() in self.runner_continue_commands
 
     def _discover_repo_urls(self, repository_url: str) -> Tuple[List[str], List[str]]:
         """Discover both .skill package URLs and shared .zip URLs from a repository listing.

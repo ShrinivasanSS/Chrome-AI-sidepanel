@@ -36,6 +36,7 @@ const runnerTimeoutMsEl = document.getElementById('runnerTimeoutMs');
 const themeModeEl = document.getElementById('themeMode');
 const trustedSessionDomainsEl = document.getElementById('trustedSessionDomains');
 const runnerCookieEnvMapEl = document.getElementById('runnerCookieEnvMap');
+const sidePanelModeEl = document.getElementById('sidePanelMode');
 const defaultChatModeEl = document.getElementById('defaultChatMode');
 
 const storageTotalEl = document.getElementById('storageTotal');
@@ -86,6 +87,7 @@ function renderSettings(settings) {
   apiUrlEl.value = settings.apiUrl;
   apiKeyEl.value = settings.apiKey;
   extensionModeEl.value = settings.extensionMode || 'developer';
+  sidePanelModeEl.value = settings.sidePanelMode || 'global';
   themeModeEl.value = settings.theme || 'light';
   applyTheme(settings.theme || 'light');
   trustedSessionDomainsEl.value = Array.isArray(settings.trustedSessionDomains)
@@ -277,6 +279,7 @@ async function handleSave(event) {
     apiUrl: apiUrlEl.value.trim(),
     apiKey: apiKeyEl.value.trim(),
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
+    sidePanelMode: sidePanelModeEl.value === 'tab' ? 'tab' : 'global',
     theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
     trustedSessionDomains: collectTrustedDomains(),
     runnerCookieEnvMap: parseCookieEnvMap(),
@@ -320,6 +323,7 @@ async function handleTest() {
       apiUrl: apiUrlEl.value.trim(),
       apiKey: apiKeyEl.value.trim(),
       extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
+      sidePanelMode: sidePanelModeEl.value === 'tab' ? 'tab' : 'global',
       theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
       trustedSessionDomains: collectTrustedDomains(),
       runnerCookieEnvMap: parseCookieEnvMap(),
@@ -528,6 +532,7 @@ function updateExample() {
     apiUrl: apiUrlEl.value.trim(),
     apiKey: apiKeyEl.value.trim(),
     extensionMode: extensionModeEl.value === 'user' ? 'user' : 'developer',
+    sidePanelMode: sidePanelModeEl.value === 'tab' ? 'tab' : 'global',
     theme: themeModeEl.value === 'dark' ? 'dark' : 'light',
     trustedSessionDomains: collectTrustedDomains(),
     runnerCookieEnvMap: parseCookieEnvMap(),

@@ -271,6 +271,38 @@ Status:
 
 ### AI generated updates
 
+#### Feature implementation — Global/Tab-wise sidepanel + History page + Cline continuation
+
+Requested changes:
+1. Extension option to select global vs tab-wise sidepanel (default: Global).
+2. Tab-wise sidepanel with per-tab chat isolation; history moved to standalone page.
+3. Cline task continuation support via `RUNNER_CONTINUE_COMMANDS` map.
+
+Planned work items:
+- [x] **Feature 1: Side Panel Mode setting** — Add `sidePanelMode` (`global`/`tab`) to storage-utils, settings page, and service worker. In tab mode, `chrome.sidePanel.setOptions` is called per-tab on `tabs.onUpdated`/`tabs.onActivated`.
+- [x] **Feature 2a: Tab-wise chat isolation** — In tab mode, detect current tab ID, persist `chatMessages` per tab in `chrome.storage.local` (key: `chatMessages_<tabId>`). Clean up storage on tab close via `tabs.onRemoved`.
+- [x] **Feature 2b: History page** — Create standalone `history.html`/`history.js` page (styled like settings page) with full history list, formatted/raw toggle, clear history, and storage metrics. Sidepanel "History" button now opens this page in a new tab instead of inline rendering.
+- [x] **Feature 3: Cline task continuation** — Add `DEFAULT_RUNNER_CONTINUE_COMMANDS` map in `launcher_core.py` with Cline template: `cline -v --yolo -T {taskId} {prompt}`. Add `_build_continue_command`, `_extract_runner_task_id`, and `_supports_continuation` methods. `_run_payload` checks for `continueTaskId` in payload and uses continue command when available. First task's stdout is parsed to extract the Cline task ID (returned as `runnerTaskId` in result).
+- [x] **Runner type fix** — Added `cline` to the allowed `runnerType` list in `normalizeRunnerConfig` in `storage-utils.js`.
+
+Files created:
+- `ai-sidepanel/history.html` — Standalone history page
+- `ai-sidepanel/history.js` — History page logic
+
+Files modified:
+- `ai-sidepanel/storage-utils.js` — Added `sidePanelMode`, `DEFAULT_SIDEPANEL_MODE`, `normalizeSidePanelMode`, cline in runner types
+- `ai-sidepanel/settings.html` — Added Side Panel Mode dropdown
+- `ai-sidepanel/settings.js` — Save/load `sidePanelMode`
+- `ai-sidepanel/service-worker.js` — Tab-wise panel mode, `applySidePanelMode`, tab listeners, per-tab chat cleanup
+- `ai-sidepanel/sidepanel.js` — Tab-scoped chat state, `loadTabChatMessages`/`saveTabChatMessages`, history button opens page
+- `skill-launcher/launcher_core.py` — `DEFAULT_RUNNER_CONTINUE_COMMANDS`, continuation support in `_run_payload`, task ID extraction
+
+Status:
+- Implementation completed by AI on 13/Apr/2026.
+- Human validation pending.
+
+---
+
 #### README update — sync docs with implemented features
 
 Scope:

@@ -36,6 +36,7 @@
 
   const DEFAULT_THEME = 'light';
   const DEFAULT_CHAT_MODE = 'chat'; // 'chat' or 'skill'
+  const DEFAULT_SIDEPANEL_MODE = 'global'; // 'global' or 'tab'
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -267,10 +268,14 @@
     };
   }
 
+  function normalizeSidePanelMode(value) {
+    return value === 'tab' ? 'tab' : 'global';
+  }
+
   function normalizeRunnerConfig(rawConfig) {
     const source = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
     const processingTarget = source.processingTarget === 'skill-runner' ? 'skill-runner' : 'api';
-    const runnerType = ['claude', 'copilot', 'cursor'].includes(source.runnerType)
+    const runnerType = ['claude', 'copilot', 'cursor', 'cline'].includes(source.runnerType)
       ? source.runnerType
       : DEFAULT_RUNNER_CONFIG.runnerType;
     const runnerMode = source.runnerMode === 'local' ? 'local' : 'remote';
@@ -298,6 +303,7 @@
       defaultModelId: hasDefault ? defaultModelId : normalizedModels[0].id,
       storageMetrics: normalizeStorageMetrics(rawSettings.storageMetrics),
       extensionMode: normalizeExtensionMode(rawSettings.extensionMode),
+      sidePanelMode: normalizeSidePanelMode(rawSettings.sidePanelMode),
       skillsConfig: normalizeSkillsConfig(rawSettings.skillsConfig),
       runnerConfig: normalizeRunnerConfig(rawSettings.runnerConfig),
       theme: normalizeTheme(rawSettings.theme),
@@ -315,6 +321,7 @@
       'model',
       'storageMetrics',
       'extensionMode',
+      'sidePanelMode',
       'skillsConfig',
       'runnerConfig',
       'theme',
@@ -328,6 +335,7 @@
       localSettings.models ||
       localSettings.defaultModelId ||
       localSettings.extensionMode ||
+      localSettings.sidePanelMode ||
       localSettings.skillsConfig ||
       localSettings.runnerConfig ||
       localSettings.theme ||
@@ -359,6 +367,7 @@
       'model',
       'storageMetrics',
       'extensionMode',
+      'sidePanelMode',
       'skillsConfig',
       'runnerConfig',
       'theme',
@@ -372,6 +381,7 @@
       existing.models ||
       existing.defaultModelId ||
       existing.extensionMode ||
+      existing.sidePanelMode ||
       existing.skillsConfig ||
       existing.runnerConfig ||
       existing.theme ||
@@ -474,6 +484,7 @@
     DEFAULT_RUNNER_COOKIE_ENV_MAP: clone(DEFAULT_RUNNER_COOKIE_ENV_MAP),
     DEFAULT_THEME,
     DEFAULT_CHAT_MODE,
+    DEFAULT_SIDEPANEL_MODE,
     loadSettings,
     saveSettings,
     sanitizeSettings,

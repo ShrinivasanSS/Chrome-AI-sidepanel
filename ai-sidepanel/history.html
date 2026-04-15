@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AI Agent Panel - History</title>
+  <style>
+    :root {
+      --bg: #f8f9fa;
+      --text: #202124;
+      --card-bg: #ffffff;
+      --section-bg: #fcfcfd;
+      --border: #dadce0;
+      --input-bg: #ffffff;
+      --muted: #5f6368;
+      --info-bg: #eef3fd;
+      --info-border: #c7d2fe;
+    }
+
+    [data-theme="dark"] {
+      --bg: #1f2229;
+      --text: #e8eaed;
+      --card-bg: #2a2d35;
+      --section-bg: #23262e;
+      --border: #4a4f5e;
+      --input-bg: #262a33;
+      --muted: #b0b6c1;
+      --info-bg: #2b3242;
+      --info-border: #4b5a78;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 40px;
+      background-color: var(--bg);
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      padding: 32px;
+      border-radius: 16px;
+      box-shadow: 0 2px 12px rgba(60, 64, 67, 0.12);
+    }
+
+    h1 {
+      color: #1a73e8;
+      font-size: 28px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    button:hover { background-color: #1557b0; }
+    button.secondary { background-color: #5f6368; }
+    button.secondary:hover { background-color: #3c4043; }
+    button.danger { background-color: #c5221f; }
+    button.danger:hover { background-color: #a50e0e; }
+
+    .mode-btn {
+      background: var(--section-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .mode-btn.active {
+      background: #1a73e8;
+      color: white;
+      border-color: #1a73e8;
+    }
+
+    .muted { color: var(--muted); font-size: 13px; }
+
+    .storage-box {
+      background: var(--info-bg);
+      border-radius: 10px;
+      padding: 12px 16px;
+      border: 1px solid var(--info-border);
+      margin-bottom: 18px;
+      font-size: 13px;
+    }
+
+    .history-item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 10px;
+      background: var(--section-bg);
+      overflow: hidden;
+    }
+
+    .history-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .history-title {
+      flex: 1;
+      font-weight: 600;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .history-meta {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .history-toggle {
+      font-size: 12px;
+      color: #1a73e8;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .history-content {
+      display: none;
+      padding: 0 14px 14px;
+    }
+
+    .history-content.expanded {
+      display: block;
+    }
+
+    .result-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+
+    .result-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      cursor: default;
+      font-size: 13px;
+    }
+
+    .result-title {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .result-content {
+      display: none;
+      padding: 8px 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      word-wrap: break-word;
+    }
+
+    .result-content.expanded {
+      display: block;
+    }
+
+    pre {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 12px;
+      overflow: auto;
+      max-height: 400px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .section-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .status {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+    }
+    .status.success { background-color: #e6f4ea; color: #137333; border: 1px solid #a8dab5; }
+    .status.error { background-color: #fce8e6; color: #c5221f; border: 1px solid #f6aea9; }
+
+    .markdown-content code { background: var(--input-bg); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+    .markdown-content pre code { background: none; padding: 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>History</h1>
+    <div class="storage-box" id="historyUsage">Loading...</div>
+
+    <div class="toolbar">
+      <button class="secondary" id="refreshBtn">Refresh</button>
+      <button class="danger" id="clearBtn">Clear History</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="historyList"></div>
+  </div>
+
+  <script src="storage-utils.js"></script>
+  <script src="history-store.js"></script>
+  <script src="markdown-renderer.js"></script>
+  <script src="history.js"></script>
+</body>
+</html>

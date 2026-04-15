@@ -8,8 +8,8 @@ const RUNNER_JOB_STALE_BUFFER_MS = 5000;
 
 chrome.runtime.onInstalled.addListener(async () => {
   try {
-    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-    await StorageUtils.loadSettings();
+    const settings = await StorageUtils.loadSettings();
+    await applySidePanelMode(settings.sidePanelMode || 'global');
     await SkillsManager.refreshSkills({ reason: 'installed' });
     await SkillsManager.scheduleRefreshAlarm();
     await ensureRunnerJobsState();
@@ -21,13 +21,83 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   try {
-    await StorageUtils.loadSettings();
+    const settings = await StorageUtils.loadSettings();
+    await applySidePanelMode(settings.sidePanelMode || 'global');
     await SkillsManager.refreshSkills({ reason: 'startup' });
     await SkillsManager.scheduleRefreshAlarm();
     await ensureRunnerJobsState();
     await startRunnerQueueProcessing();
   } catch (error) {
     console.error('[Service Worker] onStartup initialization failed:', error);
+  }
+});
+
+// ─── Side Panel Mode Management ─────────────────────────────────────────────
+
+let currentSidePanelMode = 'global';
+
+async function applySidePanelMode(mode) {
+  currentSidePanelMode = mode === 'tab' ? 'tab' : 'global';
+
+  if (currentSidePanelMode === 'global') {
+    // Global mode: single panel shared across all tabs
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    chrome.sidePanel.setOptions({ path: 'sidepanel.html', enabled: true });
+  } else {
+    // Tab mode: set panel per-tab on activation
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    // Apply to the currently active tab immediately
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id) {
+        await chrome.sidePanel.setOptions({
+          tabId: tab.id,
+          path: 'sidepanel.html',
+          enabled: true
+        });
+      }
+    } catch (err) {
+      console.warn('[Service Worker] Could not set tab-specific panel on init:', err);
+    }
+  }
+}
+
+// Enable side panel for each tab when it's updated/activated (tab mode)
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (currentSidePanelMode !== 'tab') return;
+  if (changeInfo.status === 'complete' && tab.url) {
+    try {
+      await chrome.sidePanel.setOptions({
+        tabId,
+        path: 'sidepanel.html',
+        enabled: true
+      });
+    } catch (err) {
+      // Ignore errors for restricted tabs (chrome://, etc.)
+    }
+  }
+});
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  if (currentSidePanelMode !== 'tab') return;
+  try {
+    await chrome.sidePanel.setOptions({
+      tabId: activeInfo.tabId,
+      path: 'sidepanel.html',
+      enabled: true
+    });
+  } catch (err) {
+    // Ignore errors for restricted tabs
+  }
+});
+
+// Clean up per-tab chat messages when a tab is closed
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  try {
+    const key = `chatMessages_${tabId}`;
+    await chrome.storage.local.remove([key]);
+  } catch (err) {
+    // Ignore cleanup errors
   }
 });
 
@@ -121,6 +191,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       SkillsManager.refreshSkills({ reason: 'settings-updated' })
     ).then(async (state) => {
       const settings = await StorageUtils.loadSettings();
+      await applySidePanelMode(settings.sidePanelMode || 'global');
       const launcherSync = await syncLauncherSkills(settings);
       sendResponse({ success: true, state: { ...state, launcherSync } });
     }).catch((error) => {
