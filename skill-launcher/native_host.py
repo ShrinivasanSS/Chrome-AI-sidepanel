@@ -22,11 +22,12 @@ def _write_message(message):
     sys.stdout.buffer.flush()
 
 
-def run_native_host(launcher_root: str, verbose: bool = False, log_file: str = None):
+def run_native_host(launcher_root: str, verbose: bool = False, log_file: str = None, workdir: str = None):
     launcher = SkillLauncher(
         Path(launcher_root),
         verbose=verbose,
         log_file=Path(log_file) if log_file else None,
+        workdir=Path(workdir) if workdir else None,
     )
     while True:
         message = _read_message()

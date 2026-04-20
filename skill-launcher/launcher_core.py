@@ -17,17 +17,25 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_RUNNER_COMMANDS = {
-    "claude": ["claude", "--dangerously-skip-permissions","--print", "{prompt}"],
-    "copilot": ["copilot", "--yolo", "{prompt}"],
-    "cursor": ["agent", "-p", "{prompt}"],
-    "cline": ["cline", "-v", "--yolo", "{prompt}"],
+    "claude": ["claude", "--dangerously-skip-permissions", "--print"],
+    "copilot": ["copilot", "--yolo"],
+    "cursor": ["agent", "-p"],
+    "cline": ["cline", "--yolo"],
+}
+
+DEFAULT_PROMPT_ARG = {
+    "claude": "--prompt",
+    "copilot": "--yolo",
+    "cursor": "-p",
+    "cline": "--yolo",
 }
 
 # Continue commands for runners that support task resumption.
 # {taskId} is replaced with the task ID extracted from the first run's output.
+# The prompt is always appended as the last argument automatically.
 # Only runners listed here support continuation; others always launch fresh.
 DEFAULT_RUNNER_CONTINUE_COMMANDS = {
-    "cline": ["cline", "-v", "--yolo", "-T", "{taskId}", "{prompt}"],
+    "cline": ["cline", "-v", "--yolo", "-T", "{taskId}"],
 }
 
 
@@ -75,15 +83,19 @@ class SkillLauncher:
         runner_commands: Optional[Dict[str, List[str]]] = None,
         verbose: bool = False,
         log_file: Optional[Path] = None,
+        workdir: Optional[Path] = None,
     ):
         self.launcher_root = launcher_root.resolve()
         self.launcher_root.mkdir(parents=True, exist_ok=True)
         self.tasks_root = self.launcher_root / "task-runs"
         self.tasks_root.mkdir(parents=True, exist_ok=True)
+        # Subprocess working directory: defaults to launcher_root if not specified
+        self.workdir = workdir.resolve() if workdir else self.launcher_root
 
         self.runner_commands = dict(DEFAULT_RUNNER_COMMANDS)
         self.runner_continue_commands = dict(DEFAULT_RUNNER_CONTINUE_COMMANDS)
-        self.verbose = bool(verbose)
+        # Auto-enable verbose logging when a log file is explicitly provided
+        self.verbose = bool(verbose) or (log_file is not None)
         self.log_file = log_file.resolve() if log_file else (self.launcher_root / "skill-launcher.log")
         if runner_commands:
             for key, cmd in runner_commands.items():
@@ -99,12 +111,15 @@ class SkillLauncher:
         self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="skill-launcher-worker")
         self._worker.start()
 
+        # Always ensure the log file directory exists when verbose is active
         if self.verbose:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             self._log("launcher_initialized", {
                 "launcherRoot": str(self.launcher_root),
+                "workdir": str(self.workdir),
                 "logFile": str(self.log_file),
                 "tasksRoot": str(self.tasks_root),
+                "verboseEnabledBy": "log_file" if (log_file is not None and not verbose) else "flag",
             })
 
     def handle_payload(self, payload: Dict) -> Dict:
@@ -243,8 +258,10 @@ class SkillLauncher:
             })
 
     def _run_payload(self, task_id: str, payload: Dict) -> Dict:
-        runner = _normalize_text(payload.get("runner")) or "claude"
-        prompt_arg = _normalize_text(payload.get("promptArg")) or "--prompt"
+        runnername = _normalize_text(payload.get("runner")) or "claude"
+        promptargname = _normalize_text(payload.get("promptArg")) or "--prompt"
+        runner = runnername
+        prompt_arg = DEFAULT_PROMPT_ARG.get(runnername) or promptargname
         prompt = _normalize_text(payload.get("prompt"))
         timeout_ms = int(payload.get("timeoutMs") or 120000)
         context = payload.get("context") or {}
@@ -301,7 +318,7 @@ class SkillLauncher:
         env = os.environ.copy()
         env["SKILL_RUNNER_TYPE"] = runner
         env["SKILL_RUNNER_SKILLS_DIR"] = str(skills_dir)
-        env["SKILL_RUNNER_WORKDIR"] = str(self.launcher_root)
+        env["SKILL_RUNNER_WORKDIR"] = str(self.workdir)
 
         # Set AGENT_SHARED_PATH for skill scripts that import shared libraries
         if shared_dir.exists():
@@ -364,6 +381,11 @@ class SkillLauncher:
             "stderrFile": str(stderr_file),
         })
 
+        # Resolve the executable to its full path (needed on Windows for .cmd/.bat wrappers)
+        resolved_exe = shutil.which(command[0])
+        if resolved_exe:
+            command[0] = resolved_exe
+
         started = time.time()
         try:
             with stdout_file.open("w", encoding="utf-8") as stdout_handle, stderr_file.open("w", encoding="utf-8") as stderr_handle:
@@ -373,7 +395,7 @@ class SkillLauncher:
                     stderr=stderr_handle,
                     text=True,
                     env=env,
-                    cwd=str(self.launcher_root),
+                    cwd=str(self.workdir),
                     timeout=max(5, timeout_ms / 1000.0),
                 )
             duration_ms = int((time.time() - started) * 1000)
@@ -401,6 +423,12 @@ class SkillLauncher:
 
             # Extract runner task ID for continuation support
             extracted_task_id = self._extract_runner_task_id(stdout, runner)
+            self._log("runner_task_id_extraction", {
+                "taskId": task_id,
+                "runner": runner,
+                "extractedRunnerTaskId": extracted_task_id,
+                "firstOutputLine": stdout.splitlines()[0].strip() if stdout else None,
+            })
 
             success_payload = {
                 "success": True,
@@ -851,8 +879,9 @@ class SkillLauncher:
 
         # Skill usage instruction (brief)
         if skill_names:
-            sections.append(f"Use available skills: {', '.join(skill_names)}")
-            sections.append("Read the SKILL.md files for instructions. Run scripts from the skills directory.")
+            sections.append(f"You have the following skills available: {', '.join(skill_names)}")
+            sections.append("If the user query requires the use of a specific skill, please indicate which one.")
+            sections.append("Refer to the SKILL.md files for details on each skill's capabilities and usage.")
             sections.append("")
 
         # Active tab context
@@ -1037,14 +1066,16 @@ class SkillLauncher:
 
         variables = {
             "promptArg": prompt_arg,
-            "prompt": prompt,
         }
-        return [part.format(**variables) for part in template]
+        command = [part.format(**variables) for part in template]
+        command.append(prompt)
+        return command
 
     def _build_continue_command(self, runner: str, prompt_arg: str, prompt: str, task_id: str) -> Optional[List[str]]:
         """Build a continue command for runners that support task resumption.
 
         Returns None if the runner does not have a continue command template.
+        The prompt is always appended as the last argument.
         """
         runner_key = runner.lower()
         template = self.runner_continue_commands.get(runner_key)
@@ -1053,11 +1084,12 @@ class SkillLauncher:
 
         variables = {
             "promptArg": prompt_arg,
-            "prompt": prompt,
             "taskId": task_id,
         }
         try:
-            return [part.format(**variables) for part in template]
+            command = [part.format(**variables) for part in template]
+            command.append(prompt)
+            return command
         except (KeyError, IndexError):
             return None
 
@@ -1065,8 +1097,10 @@ class SkillLauncher:
     def _extract_runner_task_id(stdout: str, runner: str) -> Optional[str]:
         """Extract a runner task ID from the first output of a CLI runner.
 
-        For Cline, the task ID is typically the first non-empty line of stdout.
-        The format may be a bare UUID/ID or prefixed like "Task ID: xxx".
+        For Cline, the output format is:
+            Task started: <taskId>
+        The task ID is the numeric/alphanumeric value after "Task started:".
+        Also supports legacy "Task ID: xxx" format and bare ID lines.
         """
         if not stdout:
             return None
@@ -1078,15 +1112,22 @@ class SkillLauncher:
 
         if runner_key == "cline":
             first_line = lines[0]
-            # Check for "Task ID: <id>" pattern
+            # Check for "Task started: <id>" pattern (primary format)
+            m = re.match(r"(?:task\s+started\s*[:\-]\s*)(.+)", first_line, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+            # Check for "Task ID: <id>" pattern (legacy)
             m = re.match(r"(?:task\s*id\s*[:\-]\s*)(.+)", first_line, re.IGNORECASE)
             if m:
                 return m.group(1).strip()
             # If first line looks like a bare ID (alphanumeric, hyphens, underscores)
             if re.match(r"^[A-Za-z0-9_\-]{4,}$", first_line):
                 return first_line
-            # Fallback: scan first few lines for a task ID pattern
+            # Fallback: scan first few lines for known task ID patterns
             for line in lines[:5]:
+                m = re.search(r"(?:task\s+started\s*[:\-=]\s*)([A-Za-z0-9_\-]+)", line, re.IGNORECASE)
+                if m:
+                    return m.group(1).strip()
                 m = re.search(r"(?:task[_\-\s]*id\s*[:\-=]\s*)([A-Za-z0-9_\-]+)", line, re.IGNORECASE)
                 if m:
                     return m.group(1).strip()
